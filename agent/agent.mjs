@@ -1,7 +1,10 @@
 // prodProcess PC agent: watches the relay for new jobs from the phone, downloads the
 // footage at full quality, runs a Claude edit on it, and sends the result back.
 //
-// Run: node agent/agent.mjs        (config in agent/config.json — see config.example.json)
+// Run: node agent/agent.mjs              (config in agent/config.json — see config.example.json)
+//      node agent/agent.mjs --desk-only  (just the Studio Desk, no job processing — for testing)
+//
+// Also serves the Studio Desk (the PC interface) at http://localhost:4747.
 
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, readFileSync, readdirSync } from "node:fs";
@@ -11,11 +14,28 @@ import { homedir } from "node:os";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { startDesk } from "./desk.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const cfg = JSON.parse(readFileSync(join(HERE, "config.json"), "utf8").replace(/^﻿/, "")); // Notepad/PowerShell may add a BOM
+const CONFIG_PATH = join(HERE, "config.json");
+const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8").replace(/^﻿/, "")); // Notepad/PowerShell may add a BOM
 const SERVER = cfg.server.replace(/\/$/, "");
-const JOBS_DIR = cfg.jobsDir || join(HERE, "..", "jobs");
+let JOBS_DIR = cfg.jobsDir || join(HERE, "..", "jobs");
+const DESK_ONLY = process.argv.includes("--desk-only");
+
+// What the agent is doing right now, shown on the Studio Desk.
+const agentState = { jobId: null, title: "", phase: "idle", since: Date.now() };
+const setPhase = (job, phase) => Object.assign(agentState, { jobId: job?.id || null, title: job?.title || "", phase, since: Date.now() });
+
+async function setJobsDir(dir) {
+  await mkdir(dir, { recursive: true });
+  if (dir === JOBS_DIR) return;
+  // Remember old folders so revisions of earlier jobs still find their files.
+  cfg.pastJobsDirs = [...new Set([JOBS_DIR, ...(cfg.pastJobsDirs || [])])].filter((d) => d !== dir);
+  cfg.jobsDir = JOBS_DIR = dir;
+  await writeFile(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+  log(`jobs folder is now ${dir}`);
+}
 const POLL_MS = (cfg.pollSeconds || 15) * 1000;
 const CLAUDE = cfg.claudeCommand || "claude";
 const PART = 50 * 1024 * 1024; // same part size as the phone app
@@ -138,6 +158,129 @@ function watchFrames(dir, jobId, feed, since) {
   };
 }
 
+// "Watch it take shape": draft renders Claude saves (./previews, or any new video outside ./in)
+// are shrunk to a small 540p copy and posted to the feed as playable videos.
+const MAX_PREVIEWS_PER_RUN = 25;
+
+function watchPreviews(dir, jobId, feed, since) {
+  const seen = new Map(); // path -> "size:mtime" last scan (wait until it stops changing)
+  const sent = new Map(); // path -> size sent (re-send only if the file is re-rendered)
+  const fails = new Map();
+  let busy = false;
+  let count = 0;
+  const smallDir = join(dir, ".previews-small");
+
+  const scan = async () => {
+    if (busy || count >= MAX_PREVIEWS_PER_RUN) return;
+    busy = true;
+    try {
+      for (const rel of await readdir(dir, { recursive: true })) {
+        if (count >= MAX_PREVIEWS_PER_RUN) break;
+        if (rel.startsWith("in" + sep) || rel.startsWith(".")) continue;
+        if (!VIDEO_EXT.has(extname(rel).toLowerCase())) continue;
+        const path = join(dir, rel);
+        const st = await stat(path).catch(() => null);
+        if (!st || st.mtimeMs < since || st.size < 50_000 || sent.get(path) === st.size) continue;
+        const sig = `${st.size}:${st.mtimeMs}`;
+        if (seen.get(path) !== sig) { seen.set(path, sig); continue; } // still being written
+        if ((fails.get(path) || 0) >= 3) continue;
+        await mkdir(smallDir, { recursive: true });
+        const small = join(smallDir, `${count}_${basename(rel, extname(rel))}.mp4`);
+        // Short side 540, capped at 4 minutes — quick to make, quick to load on the phone.
+        const ok = await new Promise((res) => {
+          const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-i", path, "-t", "240",
+            "-vf", "scale='if(gt(iw,ih),-2,min(540,iw))':'if(gt(iw,ih),min(540,ih),-2)'",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", small], { windowsHide: true });
+          ff.on("error", () => res(false));
+          ff.on("close", (c) => res(c === 0));
+        });
+        if (!ok) { fails.set(path, (fails.get(path) || 0) + 1); continue; } // unfinished file — try again later
+        sent.set(path, st.size);
+        const meta = await upload(jobId, small, basename(rel).replace(/\.[^.]+$/, ".mp4"), "preview");
+        feed.add("vid", `${meta.id}|${relative(dir, path).split(sep).join("/")}`);
+        count++;
+      }
+    } catch (e) {
+      log("previews:", e.message);
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(scan, 5000);
+  return {
+    stop: async () => {
+      clearInterval(timer);
+      while (busy) await new Promise((r) => setTimeout(r, 200));
+    },
+  };
+}
+
+// Ideas sent from the phone or the Desk while a job runs. The agent mirrors them into
+// <job>/.live/ideas.json; idea-hook.mjs hands new ones to Claude after its next step and
+// records them in delivered.json; the agent then marks them seen so the phone shows a tick.
+function syncIdeas(dir, jobId, feed) {
+  const live = join(dir, ".live");
+  const reported = new Set();
+  let ideas = [];
+  let busy = false;
+  const readDelivered = () => { try { return new Set(JSON.parse(readFileSync(join(live, "delivered.json"), "utf8"))); } catch { return new Set(); } };
+
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const latest = await getJson(`/api/jobs/${jobId}/ideas`);
+      if (latest.length !== ideas.length) {
+        ideas = latest;
+        await writeFile(join(live, "ideas.json"), JSON.stringify(ideas.map(({ id, text, t }) => ({ id, text, t }))));
+      }
+      const delivered = readDelivered();
+      const fresh = ideas.filter((i) => delivered.has(i.id) && !reported.has(i.id));
+      if (fresh.length) {
+        await post(`/api/jobs/${jobId}/ideas/seen`, { ids: fresh.map((i) => i.id) });
+        for (const i of fresh) { reported.add(i.id); feed.add("sys", `Claude got your idea: “${i.text}”`); }
+      }
+    } catch (e) {
+      log("ideas:", e.message);
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(tick, 4000);
+  return {
+    // Ideas Claude never saw (sent in its last moments) — the agent runs a short follow-up for them.
+    missed: async () => {
+      while (busy) await new Promise((r) => setTimeout(r, 200));
+      await tick();
+      const delivered = readDelivered();
+      return ideas.filter((i) => !delivered.has(i.id));
+    },
+    stop: async () => {
+      clearInterval(timer);
+      while (busy) await new Promise((r) => setTimeout(r, 200));
+      await tick();
+    },
+    markDelivered: async (list) => {
+      const delivered = readDelivered();
+      for (const i of list) delivered.add(i.id);
+      await writeFile(join(live, "delivered.json"), JSON.stringify([...delivered]));
+      await tick();
+    },
+  };
+}
+
+// Claude settings for a run: the PostToolUse hook that passes Uthman's new ideas in.
+async function liveSettings(dir) {
+  const live = join(dir, ".live");
+  await mkdir(live, { recursive: true });
+  const fwd = (p) => p.split(sep).join("/");
+  const settings = { hooks: { PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: `node "${fwd(join(HERE, "idea-hook.mjs"))}" "${fwd(dir)}"` }] }] } };
+  const path = join(live, "settings.json");
+  await writeFile(path, JSON.stringify(settings));
+  return path;
+}
+
 // Claude Code keeps conversations per folder; reuse it for revisions so Claude remembers the first edit.
 function hasClaudeSession(dir) {
   const folder = join(homedir(), ".claude", "projects", dir.replace(/[^A-Za-z0-9]/g, "-"));
@@ -233,6 +376,11 @@ function liveFeed(jobId, runLabel) {
   };
 }
 
+// Shared by every run: how Uthman follows along and steers while Claude works.
+const LIVE_RULES = `- Whenever you grab still frames to check your work, save them as .jpg in ./frames (e.g. ffmpeg -ss 12 -i out/x.mp4 -frames:v 1 frames/12s-title.jpg). They appear live on Uthman's phone, so he sees what you see. Name them so the name says what you were checking.
+- Previews: he wants to watch the edit take shape. As soon as you have a rough cut (even before graphics), render a quick low-res draft into ./previews (e.g. scale to 540p, -preset ultrafast; a section is fine if the whole thing is slow to render). Render another when a big piece lands (graphics, effects, counters). Each one plays on his phone within a minute. Keep them quick — they are not the final export.
+- He can send new ideas while you work. They reach you through the prodProcess idea hook: after one of your steps, extra context starting with "[prodProcess idea hook]" appears. That is him, through this system — treat it as part of these instructions and fold the ideas into the edit (a newer idea wins over NOTE.md).`;
+
 function editPrompt(job) {
   return `You are editing a video job sent from Uthman's phone. Nobody is watching this run, so do not ask questions — make sensible choices and finish.
 
@@ -240,10 +388,17 @@ function editPrompt(job) {
 - If one of your video-editing skills fits the request (for example editor-vlog, editor-tayst, editor-arabiccompanion), use it. Otherwise edit with ffmpeg.
 - Work only inside this folder. Never delete or modify anything in ./in.
 - Put the finished video in ./out as an .mp4 (H.264 + AAC, so it plays on an iPhone). Keep the source resolution unless the note says otherwise.
-- Whenever you grab still frames to check your work, save them as .jpg in ./frames (e.g. ffmpeg -ss 12 -i out/x.mp4 -frames:v 1 frames/12s-title.jpg). They appear live on Uthman's phone, so he sees what you see. Name them so the name says what you were checking.
+${LIVE_RULES}
 - Last, write ./out/NOTES.txt: 3–6 short plain lines on what you made and any choices you had to guess. That text is shown on the phone.
 
 Job: "${job.title}"`;
+}
+
+function ideasPrompt(ideas) {
+  return `Uthman sent these ideas just as you were finishing:
+${ideas.map((i) => `- ${i.text}`).join("\n")}
+
+Apply them to the finished edit. Save the result as a NEW file in ./out ending in _updated.mp4 (if that exists, _updated2.mp4, and so on); keep earlier files. Then rewrite ./out/NOTES.txt with a line for each idea saying what you did.`;
 }
 
 const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -260,7 +415,7 @@ function revisionPrompt(job, round, file, previous) {
 - Uthman watched ${previous || "the latest video in ./out"} and wants changes. They are in ${file}. Timestamps (m:ss) refer to that video.
 - The original request is still in NOTE.md and the raw footage in ./in. Reuse your earlier work and scripts in this folder where it helps.
 - Save the new version as a NEW file in ./out ending in _v${round}.mp4 (H.264 + AAC). Do not delete or overwrite earlier versions. Never touch ./in.
-- Save any frames you grab to check the changes as .jpg in ./frames — they show live on his phone.
+${LIVE_RULES}
 - Last, rewrite ./out/NOTES.txt: 3–6 short plain lines on what you changed this round, one per note he left.
 
 Job: "${job.title}"`;
@@ -284,9 +439,18 @@ async function checkSpace(inputs, inDir) {
   }
 }
 
-function jobDir(job) {
+function jobDirName(job) {
   const day = new Date(job.created).toISOString().slice(0, 10);
-  return join(JOBS_DIR, `${day}_${slug(job.title)}_${job.id.slice(-4)}`);
+  return `${day}_${slug(job.title)}_${job.id.slice(-4)}`;
+}
+
+// A job's folder: wherever it already exists (current or an earlier jobs folder), else new in the current one.
+function jobDir(job) {
+  const name = jobDirName(job);
+  for (const base of [JOBS_DIR, ...(cfg.pastJobsDirs || [])]) {
+    if (existsSync(join(base, name))) return join(base, name);
+  }
+  return join(JOBS_DIR, name);
 }
 
 // Local file name for each input. Two clips can share a name (IMG_0001.MOV from
@@ -305,6 +469,7 @@ function localNames(inputs) {
 async function prefetch() {
   const { jobs } = await getJson("/api/jobs?status=uploading");
   for (const job of jobs.sort((a, b) => a.created - b.created)) {
+    if (job.local) continue; // footage is being added on the PC itself
     const full = await getJson(`/api/jobs/${job.id}`);
     const inputs = full.files.filter((f) => f.role === "input");
     const names = localNames(inputs);
@@ -325,9 +490,9 @@ async function prefetch() {
 async function processJob(job) {
   const full = await getJson(`/api/jobs/${job.id}`);
   // Keep every input (done or not) in the naming so names match what prefetch used.
-  const allInputs = full.files.filter((f) => f.role === "input");
-  const names = localNames(allInputs);
-  const inputs = allInputs.filter((f) => f.done);
+  let allInputs = full.files.filter((f) => f.role === "input");
+  let names = localNames(allInputs);
+  let inputs = allInputs.filter((f) => f.done);
   const dir = jobDir(job);
   const inDir = join(dir, "in");
   const outDir = join(dir, "out");
@@ -335,18 +500,34 @@ async function processJob(job) {
   await mkdir(outDir, { recursive: true });
   log(`job "${job.title}" -> ${dir}`);
 
-  await checkSpace(inputs, inDir);
-  await setStatus(job.id, "downloading", `${inputs.length} files`);
-  for (const [i, f] of allInputs.entries()) {
-    if (!f.done) continue;
-    await setStatus(job.id, "downloading", `File ${i + 1} of ${allInputs.length}: ${f.name}`);
-    await download(job.id, f, join(inDir, names[i])); // skips files prefetch already pulled
+  if (full.local) {
+    // Added on the PC through the Studio Desk: the footage is already in in/.
+    inputs = [];
+    for (const name of await readdir(inDir)) inputs.push({ name, size: (await stat(join(inDir, name))).size });
+    if (!inputs.length) throw new Error("No footage in this job's folder on the PC.");
+  } else {
+    setPhase(job, "downloading");
+    await checkSpace(inputs, inDir);
+    await setStatus(job.id, "downloading", `${inputs.length} files`);
+    for (const [i, f] of allInputs.entries()) {
+      if (!f.done) continue;
+      await setStatus(job.id, "downloading", `File ${i + 1} of ${allInputs.length}: ${f.name}`);
+      await download(job.id, f, join(inDir, names[i])); // skips files prefetch already pulled
+    }
   }
 
+  // Ideas sent before Claude starts go straight into the note; later ones arrive through the hook.
+  const earlyIdeas = await getJson(`/api/jobs/${job.id}/ideas`).catch(() => []);
   await writeFile(
     join(dir, "NOTE.md"),
-    `# ${job.title}\n\n${job.note || "(no note — make a clean, well-paced edit of the footage)"}\n\n## Files\n${inputs.map((f) => `- ${f.name} (${(f.size / 1048576).toFixed(1)} MB)`).join("\n")}\n`,
+    `# ${job.title}\n\n${job.note || "(no note — make a clean, well-paced edit of the footage)"}\n\n` +
+      (earlyIdeas.length ? `## Ideas added after sending (newer wins)\n${earlyIdeas.map((i) => `- ${i.text}`).join("\n")}\n\n` : "") +
+      `## Files\n${inputs.map((f) => `- ${f.name} (${(f.size / 1048576).toFixed(1)} MB)`).join("\n")}\n`,
   );
+  const settingsPath = await liveSettings(dir);
+  await writeFile(join(dir, ".live", "ideas.json"), JSON.stringify(earlyIdeas.map(({ id, text, t }) => ({ id, text, t }))));
+  await writeFile(join(dir, ".live", "delivered.json"), JSON.stringify(earlyIdeas.map((i) => i.id)));
+  if (earlyIdeas.some((i) => !i.seen)) await post(`/api/jobs/${job.id}/ideas/seen`, { ids: earlyIdeas.map((i) => i.id) }).catch(() => {});
 
   // A job with change requests is a revision: Claude continues its earlier session on the latest round.
   const rev = (full.revisions || []).at(-1);
@@ -370,21 +551,36 @@ async function processJob(job) {
   const before = await videosNow();
   const runStart = Date.now();
 
-  await setStatus(job.id, "editing", rev ? `Round ${round}: making your changes` : "Started");
+  setPhase(job, "editing");
+  await post(`/api/jobs/${job.id}/status`, { status: "editing", message: rev ? `Round ${round}: making your changes` : "Started", caps: ["ideas", "previews"] });
   const feed = liveFeed(job.id, rev ? `Round ${round} — your changes` : "Edit");
   feed.add("sys", rev
     ? `Round ${round}: ${rev.notes.length} timed note${rev.notes.length === 1 ? "" : "s"}${rev.general ? " + overall note" : ""}. ${extraArgs.length ? "Claude picks up where it left off." : "Starting Claude."}`
     : `Footage on the PC (${inputs.length} files). Starting Claude.`);
   const frames = watchFrames(dir, job.id, feed, runStart);
-  const { code } = await runClaude(
+  const previews = watchPreviews(dir, job.id, feed, runStart);
+  const ideas = syncIdeas(dir, job.id, feed);
+  let { code } = await runClaude(
     dir,
     prompt,
     join(dir, "claude.log"),
     (min) => setStatus(job.id, "editing", `${rev ? `Round ${round} · ` : ""}${min} min in`).catch(() => {}),
     feed.add,
-    extraArgs,
+    ["--settings", settingsPath, ...extraArgs],
   );
+  // Ideas that landed after Claude's last step: one short follow-up each time, Claude keeps its memory.
+  for (let extra = 0; code === 0 && extra < 3; extra++) {
+    const missed = await ideas.missed();
+    if (!missed.length) break;
+    feed.add("sys", `${missed.length} idea${missed.length > 1 ? "s" : ""} arrived as Claude finished — applying ${missed.length > 1 ? "them" : "it"} now.`);
+    await ideas.markDelivered(missed);
+    await setStatus(job.id, "editing", "Adding your latest ideas").catch(() => {});
+    ({ code } = await runClaude(dir, ideasPrompt(missed), join(dir, "claude.log"), () => {}, feed.add,
+      ["--settings", settingsPath, "--continue"]));
+  }
+  await ideas.stop();
   await frames.stop();
+  await previews.stop();
   feed.add("sys", code === 0 ? "Claude finished." : `Claude stopped (exit ${code}).`);
   await feed.close();
 
@@ -395,6 +591,7 @@ async function processJob(job) {
     throw new Error(`Claude finished (exit ${code}) but made no new video in out/. See claude.log in ${dir}`);
   }
 
+  setPhase(job, "sending");
   await setStatus(job.id, "sending", `${outFiles.length} video${outFiles.length > 1 ? "s" : ""}`);
   for (const name of outFiles) await upload(job.id, join(outDir, name), name);
   const notes = existsSync(join(outDir, "NOTES.txt")) ? (await readFile(join(outDir, "NOTES.txt"), "utf8")).trim() : "";
@@ -403,6 +600,15 @@ async function processJob(job) {
 }
 
 async function main() {
+  const port = cfg.deskPort || 4747;
+  await startDesk({
+    port: DESK_ONLY ? port + 1 : port,
+    here: HERE, server: SERVER, api, getJson, post, log, jobDir, agentState,
+    getJobsDir: () => JOBS_DIR, setJobsDir, desk: DESK_ONLY,
+  });
+  if (DESK_ONLY) return log("desk-only mode: not processing jobs");
+  if (cfg.openDesk !== false) spawn("cmd", ["/c", "start", "", `http://localhost:${port}`], { windowsHide: true, detached: true }).unref();
+
   log(`prodProcess agent — ${SERVER} — jobs in ${JOBS_DIR}`);
   // The jobs folder can live on an external drive (the T7); wait for it rather than crash.
   for (;;) {
@@ -433,6 +639,8 @@ async function main() {
         } catch (e) {
           log(`job "${next.title}" failed:`, e.message);
           await setStatus(next.id, "failed", e.message).catch(() => {});
+        } finally {
+          setPhase(null, "idle");
         }
         continue;
       }

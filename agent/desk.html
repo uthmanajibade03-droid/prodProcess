@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio Desk</title>
+<link rel="icon" href="/icon.png">
+<style>
+  :root {
+    --bg: #0e0e10; --panel: #131316; --card: #18181b; --line: #27272a; --text: #f4f4f5; --dim: #a1a1aa; --faint: #71717a;
+    --accent: #f97316; --ok: #22c55e; --bad: #ef4444; --wait: #eab308;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  header h1 span { color: var(--faint); font-weight: 500; }
+  .pill { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim);
+    background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .dot.on { background: var(--accent); animation: pulse 1.4s infinite; }
+  .dot.idle { background: var(--ok); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .wrap { display: grid; grid-template-columns: 360px 1fr; min-height: 0; }
+  aside { border-right: 1px solid var(--line); overflow-y: auto; padding: 16px; background: var(--panel); }
+  main { min-height: 0; overflow: hidden; position: relative; }
+  main iframe { border: 0; width: 100%; height: 100%; display: block; background: var(--bg); }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 22px 0 8px; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  button { appearance: none; border: 0; border-radius: 10px; padding: 10px 14px; font: inherit; font-weight: 600; cursor: pointer;
+    background: #232326; color: var(--text); }
+  button:hover { background: #2c2c30; }
+  button.primary { background: var(--accent); color: #111; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.primary:disabled { opacity: .45; cursor: default; }
+  button.small { padding: 6px 10px; font-size: 13px; border-radius: 8px; }
+  button.link { background: none; color: var(--accent); padding: 0; font-weight: 600; }
+  .new { width: 100%; padding: 12px; font-size: 15px; }
+  .job { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 12px; margin-top: 8px; font-weight: 400; }
+  .job:hover { background: #1e1e22; }
+  .job.sel { border-color: var(--accent); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--dim); font-size: 13px; }
+  .chip { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; background: #27272a; color: var(--dim);
+    text-transform: uppercase; letter-spacing: .04em; }
+  .chip.done { background: rgba(34,197,94,.15); color: var(--ok); }
+  .chip.failed { background: rgba(239,68,68,.15); color: var(--bad); }
+  .chip.busy { background: rgba(234,179,8,.15); color: var(--wait); }
+  .pc { font-size: 10px; color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
+  .bar { height: 6px; background: #27272a; border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .bar.low > i { background: var(--bad); }
+  .bar.mid > i { background: var(--wait); }
+  .drive + .drive { margin-top: 12px; }
+  .drive .free { font-variant-numeric: tabular-nums; }
+  .warn { color: var(--bad); font-size: 13px; margin-top: 4px; }
+  .path { font-family: ui-monospace, Consolas, monospace; font-size: 13px; word-break: break-all; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .empty { display: grid; place-items: center; height: 100%; color: var(--dim); text-align: center; padding: 40px; }
+  .empty b { color: var(--text); display: block; font-size: 18px; margin-bottom: 6px; }
+
+  /* new job + folder picker */
+  .panel { height: 100%; overflow-y: auto; padding: 24px 28px 40px; }
+  .panel h1 { font-size: 22px; margin: 0 0 4px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 24px; margin-top: 18px; align-items: start; }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 0 0 6px; }
+  input[type=text], textarea { width: 100%; background: #0b0b0d; color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; font: inherit; }
+  textarea { min-height: 150px; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  .crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 14px; margin-bottom: 10px; }
+  .crumbs button { background: none; padding: 2px 4px; color: var(--accent); font-weight: 500; }
+  .crumbs span { color: var(--faint); }
+  .list { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 56vh; overflow-y: auto; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--line); cursor: pointer; }
+  .item:first-child { border-top: 0; }
+  .item:hover { background: #1b1b1f; }
+  .item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .sz { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .item input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .folder::before { content: "📁"; }
+  .drv::before { content: "💽"; }
+  .picked { margin-top: 8px; font-size: 14px; }
+  .picked .item { cursor: default; padding: 7px 10px; }
+  .err { color: var(--bad); font-size: 14px; margin-top: 8px; }
+  .hint { color: var(--faint); font-size: 13px; margin-top: 6px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 10; padding: 20px; }
+  .modal > div { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; width: min(640px, 100%); max-height: 86vh;
+    overflow-y: auto; padding: 20px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } aside { border-right: 0; } main { min-height: 80vh; } .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>prodProcess <span>Studio Desk</span></h1>
+  <div class="pill"><span class="dot" id="agentDot"></span><span id="agentText">Connecting…</span></div>
+</header>
+<div class="wrap">
+  <aside>
+    <button class="primary new" id="newBtn">＋ New job from this PC</button>
+    <div class="hint" style="text-align:center">Footage from an SD card, the T7 or any folder — no upload needed.</div>
+    <h2 style="margin-top:22px">Jobs</h2>
+    <div id="jobs"><div class="meta">Loading…</div></div>
+    <h2>Saving to</h2>
+    <div class="card">
+      <div class="path" id="jobsDir">…</div>
+      <div class="meta" id="jobsDirFree"></div>
+      <div class="actions"><button class="small" id="changeDir">Change…</button><button class="small" id="openDir">Open folder</button></div>
+    </div>
+    <h2>Drives</h2>
+    <div class="card" id="drives"><div class="meta">Checking…</div></div>
+  </aside>
+  <main id="main"><div class="empty"><div><b>Pick a job</b>or start one from footage on this PC.</div></div></main>
+</div>
+
+<div class="modal" id="dirModal" hidden><div>
+  <div class="row"><b style="font-size:18px">Where should jobs be saved?</b><button class="small" id="dirClose">Close</button></div>
+  <div class="hint">New jobs get their own folder in here. Pick a drive with lots of free space — video work takes room. Old jobs stay where they are.</div>
+  <div class="crumbs" id="dirCrumbs" style="margin-top:14px"></div>
+  <div class="list" id="dirList"></div>
+  <div class="actions"><button class="primary" id="dirUse" disabled>Save jobs here</button></div>
+  <div class="err" id="dirErr" hidden></div>
+</div></div>
+
+<script>
+const LABEL = { uploading: "Sending", ready: "Queued", downloading: "To PC", editing: "Editing", sending: "Returning", done: "Done", failed: "Failed" };
+const BUSY = ["uploading", "ready", "downloading", "editing", "sending"];
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const gb = (n) => n >= 1024 ** 4 ? (n / 1024 ** 4).toFixed(2) + " TB" : (n / 1024 ** 3).toFixed(n < 10 * 1024 ** 3 ? 1 : 0) + " GB";
+const size = (n) => n < 1024 ** 3 ? (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + " MB" : gb(n);
+const chip = (st) => `<span class="chip ${st === "done" ? "done" : st === "failed" ? "failed" : BUSY.includes(st) ? "busy" : ""}">${LABEL[st] || st}</span>`;
+function ago(t) {
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "x-desk": "1", ...(opts.body ? { "content-type": "application/json" } : {}) } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+
+let selected = null, jobs = [], state = null;
+
+// ---------- jobs + agent ----------
+async function loadJobs() {
+  try { ({ jobs } = await api("/api/jobs")); } catch (e) { $("jobs").innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  drawJobs();
+}
+function drawJobs() {
+  const copies = state?.copies || {};
+  $("jobs").innerHTML = jobs.length ? jobs.map((j) => {
+    const c = copies[j.id];
+    const extra = c ? (c.error ? `<div class="warn">${esc(c.error)}</div>` : c.file ? `<div class="meta">Copying ${esc(c.file)} · ${size(c.done)} of ${size(c.total)}</div>
+      <div class="bar"><i style="width:${(c.done / c.total * 100).toFixed(1)}%"></i></div>` : "")
+      : `<div class="meta">${ago(j.created)}${j.message && BUSY.includes(j.status) ? " · " + esc(j.message.slice(0, 50)) : ""}</div>`;
+    return `<button class="job ${j.id === selected ? "sel" : ""}" data-id="${j.id}">
+      <div class="row"><span class="title">${esc(j.title)}${j.local ? '<span class="pc">PC</span>' : ""}</span>${chip(j.status)}</div>${extra}</button>`;
+  }).join("") : `<div class="meta">No jobs yet.</div>`;
+  $("jobs").querySelectorAll(".job").forEach((b) => (b.onclick = () => openJob(b.dataset.id)));
+}
+function openJob(id) {
+  selected = id;
+  drawJobs();
+  $("main").innerHTML = `<iframe src="/app#/job/${id}" title="Job"></iframe>`;
+  const f = $("main").querySelector("iframe");
+  // The job page's own "‹ Jobs" link would show the phone list inside the Desk — send it back here instead.
+  f.onload = () => {
+    try {
+      f.contentWindow.addEventListener("hashchange", () => {
+        const h = f.contentWindow.location.hash;
+        if (!h.startsWith("#/job/")) { selected = null; drawJobs(); showEmpty(); }
+      });
+      const s = f.contentDocument.createElement("style");
+      s.textContent = "main{max-width:760px} .f-img img,.f-vid video{max-width:520px}";
+      f.contentDocument.head.appendChild(s);
+    } catch {}
+  };
+}
+function showEmpty() { $("main").innerHTML = `<div class="empty"><div><b>Pick a job</b>or start one from footage on this PC.</div></div>`; }
+
+async function loadState() {
+  try { state = await api("/local/state"); } catch { $("agentText").textContent = "Agent not responding"; return; }
+  const a = state.agent;
+  const mins = Math.max(0, Math.round((Date.now() - a.since) / 60000));
+  $("agentDot").className = "dot " + (a.phase === "idle" ? "idle" : "on");
+  $("agentText").textContent = a.phase === "idle" ? "Ready — waiting for jobs"
+    : `${{ downloading: "Downloading", editing: "Editing", sending: "Sending back" }[a.phase] || a.phase}: ${a.title} · ${mins} min`;
+  $("jobsDir").textContent = state.jobsDir;
+  const home = state.drives.find((d) => state.jobsDir.toUpperCase().startsWith(d.root.toUpperCase()));
+  $("jobsDirFree").textContent = home ? `${gb(home.free)} free on ${home.label || home.letter + ":"}` : "";
+  $("drives").innerHTML = state.drives.map((d) => {
+    const used = 1 - d.free / d.size, pct = (used * 100).toFixed(1);
+    const low = d.free < 5 * 1024 ** 3 || used > 0.97, mid = !low && (d.free < 30 * 1024 ** 3 || used > 0.9);
+    const jobsHere = home && home.root === d.root;
+    return `<div class="drive"><div class="row"><span><b>${esc(d.label || "Drive")}</b> <span class="meta">${d.letter}:${d.type === "Removable" ? " · removable" : ""}${jobsHere ? " · jobs here" : ""}</span></span>
+      <span class="meta free">${gb(d.free)} free of ${gb(d.size)}</span></div>
+      <div class="bar ${low ? "low" : mid ? "mid" : ""}"><i style="width:${pct}%"></i></div>
+      ${low ? `<div class="warn">Almost full${d.letter === "C" ? " — Windows, apps and Claude itself need space here" : ""}.</div>` : ""}</div>`;
+  }).join("");
+  if (Object.keys(state.copies).length) drawJobs();
+}
+
+// ---------- folder browser (used by both "Change…" and New job) ----------
+async function browse(path) { return api("/local/browse?path=" + encodeURIComponent(path || "")); }
+function crumbs(el, path, go) {
+  const parts = path ? path.replace(/\\$/, "").split("\\") : [];
+  el.innerHTML = `<button data-p="">This PC</button>` + parts.map((p, i) => {
+    const full = parts.slice(0, i + 1).join("\\") + (i === 0 ? "\\" : "");
+    return `<span>›</span><button data-p="${esc(full)}">${esc(i === 0 ? p : p)}</button>`;
+  }).join("");
+  el.querySelectorAll("button").forEach((b) => (b.onclick = () => go(b.dataset.p)));
+}
+const driveRow = (d) => `<div class="item" data-dir="${esc(d.root)}"><span class="nm drv"> ${esc(d.label || "Drive")} (${d.letter}:)</span><span class="sz">${gb(d.free)} free</span></div>`;
+
+// Jobs folder
+let dirPath = "";
+async function dirGo(p) {
+  $("dirErr").hidden = true;
+  let r;
+  try { r = await browse(p); } catch (e) { $("dirErr").textContent = e.message; $("dirErr").hidden = false; return; }
+  dirPath = r.path;
+  crumbs($("dirCrumbs"), r.path, dirGo);
+  $("dirList").innerHTML = (r.path ? "" : r.drives.map(driveRow).join(""))
+    + r.dirs.map((d) => `<div class="item" data-dir="${esc(r.path.replace(/\\$/, "") + "\\" + d)}"><span class="nm folder"> ${esc(d)}</span></div>`).join("")
+    + (r.path && !r.dirs.length ? `<div class="item meta" style="cursor:default">No folders inside — you can save here.</div>` : "");
+  $("dirList").querySelectorAll("[data-dir]").forEach((el) => (el.onclick = () => dirGo(el.dataset.dir)));
+  $("dirUse").disabled = !r.path;
+  $("dirUse").textContent = r.path ? `Save jobs in ${r.path}` : "Pick a drive or folder";
+}
+$("changeDir").onclick = () => { $("dirModal").hidden = false; const cur = state?.jobsDir || ""; dirGo(cur).catch(() => dirGo("")); };
+$("dirClose").onclick = () => ($("dirModal").hidden = true);
+$("dirUse").onclick = async () => {
+  try { await api("/local/jobs-dir", { method: "POST", body: JSON.stringify({ path: dirPath }) }); $("dirModal").hidden = true; loadState(); }
+  catch (e) { $("dirErr").textContent = e.message; $("dirErr").hidden = false; }
+};
+$("openDir").onclick = () => api("/local/open", { method: "POST", body: "{}" }).catch((e) => alert(e.message));
+
+// ---------- new job from PC footage ----------
+const draft = { title: "", note: "", picked: new Map(), path: "" };
+function showNew() {
+  selected = null; drawJobs();
+  $("main").innerHTML = `<div class="panel">
+    <h1>New job from this PC</h1>
+    <div class="meta">Pick clips from any drive or card. They're copied into the job folder — nothing is uploaded, so it starts much faster.</div>
+    <div class="cols">
+      <div>
+        <div class="crumbs" id="nCrumbs"></div>
+        <div class="actions" style="margin:0 0 8px" id="nBulk" hidden><button class="small" id="nAll">Select all here</button><button class="small" id="nNone">Clear these</button></div>
+        <div class="list" id="nList"></div>
+        <div class="err" id="nBrowseErr" hidden></div>
+      </div>
+      <div>
+        <label for="nTitle">Name</label><input id="nTitle" type="text" placeholder="e.g. Basketball — older vs younger" value="${esc(draft.title)}">
+        <label for="nNote" style="margin-top:12px">What do you want?</label>
+        <textarea id="nNote" placeholder="e.g. high-energy highlights, keep score on screen, white flashes, no music">${esc(draft.note)}</textarea>
+        <h2>Picked</h2>
+        <div class="card picked" id="nPicked"></div>
+        <button class="primary" id="nStart" style="width:100%;margin-top:12px">Start job</button>
+        <div class="err" id="nErr" hidden></div>
+        <div class="hint">You can add ideas while Claude works, and watch drafts as they're rendered.</div>
+      </div>
+    </div></div>`;
+  $("nTitle").oninput = (e) => (draft.title = e.target.value);
+  $("nNote").oninput = (e) => (draft.note = e.target.value);
+  $("nStart").onclick = startJob;
+  newGo(draft.path);
+  drawPicked();
+}
+async function newGo(p) {
+  let r;
+  try { r = await browse(p); } catch (e) { $("nBrowseErr").textContent = e.message; $("nBrowseErr").hidden = false; return; }
+  $("nBrowseErr").hidden = true;
+  draft.path = r.path;
+  crumbs($("nCrumbs"), r.path, newGo);
+  $("nBulk").hidden = !r.files.length;
+  $("nList").innerHTML = (r.path ? "" : r.drives.map(driveRow).join(""))
+    + r.dirs.map((d) => `<div class="item" data-dir="${esc(r.path.replace(/\\$/, "") + "\\" + d)}"><span class="nm folder"> ${esc(d)}</span></div>`).join("")
+    + r.files.map((f) => `<label class="item" style="margin:0"><input type="checkbox" data-f="${esc(f.path)}" ${draft.picked.has(f.path) ? "checked" : ""}>
+        <span class="nm">${esc(f.name)}</span><span class="sz">${size(f.size)} · ${new Date(f.mtime).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></label>`).join("")
+    + (r.path && !r.dirs.length && !r.files.length ? `<div class="item meta" style="cursor:default">No clips or folders here.</div>` : "");
+  $("nList").querySelectorAll("[data-dir]").forEach((el) => (el.onclick = () => newGo(el.dataset.dir)));
+  const files = new Map(r.files.map((f) => [f.path, f]));
+  $("nList").querySelectorAll("input[data-f]").forEach((c) => (c.onchange = () => {
+    c.checked ? draft.picked.set(c.dataset.f, files.get(c.dataset.f)) : draft.picked.delete(c.dataset.f);
+    drawPicked();
+  }));
+  $("nAll").onclick = () => { for (const f of r.files) draft.picked.set(f.path, f); newGo(r.path); drawPicked(); };
+  $("nNone").onclick = () => { for (const f of r.files) draft.picked.delete(f.path); newGo(r.path); drawPicked(); };
+}
+function drawPicked() {
+  const list = [...draft.picked.values()];
+  const total = list.reduce((a, f) => a + f.size, 0);
+  $("nPicked").innerHTML = list.length
+    ? list.map((f) => `<div class="item"><span class="nm">${esc(f.name)}</span><span class="sz">${size(f.size)}</span></div>`).join("")
+      + `<div class="item"><span class="nm meta">${list.length} file${list.length > 1 ? "s" : ""}</span><span class="sz"><b>${size(total)}</b></span></div>`
+    : `<div class="meta">Tick clips on the left — you can pick from several folders.</div>`;
+  $("nStart").disabled = !list.length;
+}
+async function startJob() {
+  $("nErr").hidden = true;
+  $("nStart").disabled = true; $("nStart").textContent = "Starting…";
+  try {
+    const { id } = await api("/local/new-job", { method: "POST", body: JSON.stringify({ title: draft.title, note: draft.note, paths: [...draft.picked.keys()] }) });
+    draft.title = ""; draft.note = ""; draft.picked.clear();
+    await loadJobs(); await loadState();
+    openJob(id);
+  } catch (e) {
+    $("nErr").textContent = e.message; $("nErr").hidden = false;
+    $("nStart").disabled = false; $("nStart").textContent = "Start job";
+  }
+}
+$("newBtn").onclick = showNew;
+
+// ---------- refresh ----------
+async function tick() {
+  await Promise.all([loadJobs(), loadState()]);
+  const copying = Object.values(state?.copies || {}).some((c) => c.file);
+  setTimeout(tick, copying ? 1500 : 5000);
+}
+tick();
+</script>
+</body>
+</html>

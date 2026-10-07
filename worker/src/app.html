@@ -100,6 +100,17 @@
   .earlier summary { cursor: pointer; font-weight: 600; }
   .ver { margin-top: 12px; }
   .ver video { margin: 6px 0 8px; }
+  .f-vid video { max-width: 360px; border: 1px solid var(--line); }
+  .f-vid .cap { display: block; color: #71717a; font-size: 12px; margin-top: 4px; }
+  .peek { position: relative; border-radius: 12px; overflow: hidden; background: #000; border: 1px solid var(--line); }
+  .peek img { display: block; width: 100%; max-height: 420px; object-fit: contain; }
+  .peek .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 12px 8px; font-size: 13px;
+    background: linear-gradient(transparent, rgba(0,0,0,.75)); color: #e4e4e7; }
+  .draft { margin-top: 10px; }
+  .draft .meta { margin-bottom: 6px; }
+  .idea { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 15px; }
+  .idea .st { color: var(--dim); font-size: 13px; white-space: nowrap; }
+  .idea .st.ok { color: var(--ok); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -391,6 +402,8 @@ async function putPart(url, blob, onLoaded) {
 async function viewJob(id) {
   app.innerHTML = `<header><a class="back" href="#/">‹ Jobs</a></header>
     <div id="top"><div class="empty">Loading…</div></div>
+    <div id="shape"></div>
+    <div id="ideas"></div>
     <details id="live" class="card livebox" hidden><summary><span id="liveTitle">Live</span><span class="meta" id="liveCount"></span></summary>
       <div class="feed" id="feed"></div></details>
     <div id="bottom"></div>`;
@@ -464,9 +477,12 @@ async function viewJob(id) {
     document.getElementById("bottom").innerHTML = `
       ${job.note ? `<h2>Your note</h2><div class="card note">${esc(job.note)}</div>` : ""}
       ${(job.revisions || []).map((r) => `<h2>Round ${r.n + 1} changes</h2><div class="card note">${r.notes.map((n) => `<b class="ts">${clock(n.t)}</b> ${esc(n.text)}`).join("\n")}${r.general ? (r.notes.length ? "\n\n" : "") + esc(r.general) : ""}</div>`).join("")}
-      <h2>Sent footage</h2>
-      <div class="card">${inputs.map((f) => `<div class="file"><span class="name">${esc(f.name)}</span><span class="size">${f.done ? size(f.size) : "incomplete"}</span></div>`).join("") || `<div class="meta">None</div>`}</div>
+      ${job.local ? `<h2>Footage on the PC</h2>
+      <div class="card">${(job.localFiles || []).map((f) => `<div class="file"><span class="name">${esc(f.name)}</span><span class="size">${size(f.size)}</span></div>`).join("") || `<div class="meta">Being added on the PC</div>`}</div>` : `<h2>Sent footage</h2>
+      <div class="card">${inputs.map((f) => `<div class="file"><span class="name">${esc(f.name)}</span><span class="size">${f.done ? size(f.size) : "incomplete"}</span></div>`).join("") || `<div class="meta">None</div>`}</div>`}
       <button class="danger" id="del" style="margin-top:24px;width:100%">Delete job</button>`;
+    drawShape(job, id);
+    drawIdeas(job, id, load);
     wireReview(id, revDraft, videos[0], load);
     const retry = document.getElementById("retry");
     if (retry) retry.onclick = async () => { await api(`/api/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "ready", message: "" }) }); load(); };
@@ -550,6 +566,74 @@ function wireReview(jobId, draft, latest, reload) {
   draw();
 }
 
+// "Taking shape": while Claude works, the last frame it checked (big) and its draft renders.
+// Redrawn only when something new arrives, so a draft you're watching never resets.
+function drawShape(job, id) {
+  const el = document.getElementById("shape");
+  const busy = BUSY.includes(job.status);
+  const frames = job.files.filter((f) => f.role === "frame" && f.done);
+  const drafts = job.files.filter((f) => f.role === "preview" && f.done).sort((a, b) => b.created - a.created);
+  const peek = busy && job.status !== "ready" ? frames.at(-1) : null;
+  const key = `${busy}|${peek?.id || ""}|${drafts.map((f) => f.id).join()}`;
+  if (el.dataset.key === key) return;
+  if ([...el.querySelectorAll("video")].some((v) => !v.paused)) return;
+  el.dataset.key = key;
+  if (!peek && !drafts.length) { el.innerHTML = ""; return; }
+  const src = (f) => `/api/jobs/${id}/files/${f.id}`;
+  const when = (f) => new Date(f.created).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const draft = (f, n, preload) => `<div class="draft"><div class="meta">Draft ${n} · ${when(f)} · ${esc(f.name)}</div>
+    <video src="${src(f)}" controls playsinline preload="${preload}"></video></div>`;
+  el.innerHTML = busy
+    ? `<h2>Taking shape</h2>
+      ${peek ? `<div class="peek"><img src="${src(peek)}" alt=""><div class="cap">Latest frame Claude checked · ${esc(peek.name)} · ${when(peek)}</div></div>` : ""}
+      ${drafts.length ? draft(drafts[0], drafts.length, "metadata") : `<div class="hint">Rough drafts will show up here to play as soon as Claude renders one.</div>`}
+      ${drafts.length > 1 ? `<details class="card earlier"><summary>Earlier drafts (${drafts.length - 1})</summary>
+        ${drafts.slice(1).map((f, i) => draft(f, drafts.length - 1 - i, "none")).join("")}</details>` : ""}`
+    : `<details class="card earlier" style="margin-bottom:14px"><summary>Drafts along the way (${drafts.length})</summary>
+        ${drafts.map((f, i) => draft(f, drafts.length - i, "none")).join("")}</details>`;
+}
+
+// New ideas while the job is queued or being edited. Claude gets them after its next step.
+function drawIdeas(job, id, reload) {
+  const el = document.getElementById("ideas");
+  const ideas = job.ideas || [];
+  const open = ["uploading", "ready", "downloading"].includes(job.status)
+    || (["editing", "sending"].includes(job.status) && (job.caps || []).includes("ideas"));
+  const oldRun = ["editing", "sending"].includes(job.status) && !open;
+  if (!open && !ideas.length && !oldRun) { el.innerHTML = ""; return; }
+  if (!el.querySelector("#ideaList")) {
+    el.innerHTML = `<h2>${open ? "Add an idea" : "Your ideas"}</h2><div class="card">
+      <div id="ideaForm">
+        <div class="hint" style="margin-top:0" id="ideaHint"></div>
+        <textarea id="ideaText" placeholder="e.g. keep the score in the top corner the whole time" style="min-height:70px;margin-top:8px"></textarea>
+        <button class="primary" id="ideaSend" style="margin-top:8px">Send idea</button>
+        <div class="err" id="ideaErr" hidden></div>
+      </div>
+      <div id="ideaList"></div></div>`;
+    const send = async () => {
+      const t = document.getElementById("ideaText"), b = document.getElementById("ideaSend"), err = document.getElementById("ideaErr");
+      if (!t.value.trim()) return;
+      b.disabled = true; b.textContent = "Sending…"; err.hidden = true;
+      try {
+        await api(`/api/jobs/${id}/ideas`, { method: "POST", body: JSON.stringify({ text: t.value }) });
+        t.value = "";
+        reload();
+      } catch (e) { err.textContent = e.message; err.hidden = false; }
+      b.disabled = false; b.textContent = "Send idea";
+    };
+    document.getElementById("ideaSend").addEventListener("click", send);
+  }
+  document.getElementById("ideaForm").hidden = !open;
+  document.getElementById("ideaHint").textContent = job.status === "editing"
+    ? "Claude gets it after its next step — usually within a minute. It can change anything not finished yet."
+    : "Claude will start with it.";
+  const pending = job.status === "editing" ? "Sending to Claude…" : "Waiting for Claude to start";
+  document.getElementById("ideaList").innerHTML =
+    (oldRun ? `<div class="hint" style="margin-top:0">This edit started before ideas existed, so Claude can't take new ones mid-way. Use <b>Want changes?</b> when it's done — from your next job on, you can add ideas any time.</div>` : "")
+    + ideas.slice().reverse().map((i) => `<div class="idea"><span>${esc(i.text)}</span>
+      <span class="st ${i.seen ? "ok" : ""}">${i.seen ? "✓ Claude got it" : ["done", "failed"].includes(job.status) ? "Not used" : pending}</span></div>`).join("");
+}
+
 function feedLine(e, jobId) {
   const time = new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (e.k === "run") return `<div class="f-run">${esc(e.x)} · ${time}</div>`;
@@ -558,6 +642,12 @@ function feedLine(e, jobId) {
     const src = `/api/jobs/${jobId}/files/${encodeURIComponent(fid)}`;
     return `<div class="f f-img"><span class="f-t">${time}</span><a class="f-x" href="${src}" target="_blank" rel="noopener">
       <img src="${src}" loading="lazy" alt=""><span class="cap">${esc(rest.join("|"))}</span></a></div>`;
+  }
+  if (e.k === "vid") {
+    const [fid, ...rest] = e.x.split("|");
+    const src = `/api/jobs/${jobId}/files/${encodeURIComponent(fid)}`;
+    return `<div class="f f-vid"><span class="f-t">${time}</span><span class="f-x">
+      <video src="${src}" controls playsinline preload="none"></video><span class="cap">Draft · ${esc(rest.join("|"))}</span></span></div>`;
   }
   return `<div class="f f-${esc(e.k)}"><span class="f-t">${time}</span><span class="f-x">${esc(e.x)}</span></div>`;
 }

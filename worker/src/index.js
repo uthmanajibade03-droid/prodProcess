@@ -77,6 +77,7 @@ async function api(request, env, url) {
       note: String(body.note || "").slice(0, 10000),
       status: "uploading",
       message: "",
+      local: body.local === true, // footage added on the PC (Studio Desk); never uploaded
       created: now,
       updated: now,
     };
@@ -91,7 +92,34 @@ async function api(request, env, url) {
 
   // GET /api/jobs/:id
   if (parts.length === 2 && method === "GET") {
-    return json({ ...job, files: await listFiles(B, id) });
+    const [files, ideas] = await Promise.all([listFiles(B, id), getJson(B, ideasKey(id))]);
+    return json({ ...job, files, ideas: ideas || [] });
+  }
+
+  // POST /api/jobs/:id/ideas  {text}  — a new idea while the job is queued or being edited.
+  // Kept in their own record so the agent's status updates can't overwrite them.
+  if (parts[2] === "ideas" && parts.length === 3 && method === "POST") {
+    if (["done", "failed"].includes(job.status)) throw httpError(409, "This edit has finished — use Want changes? instead");
+    const text = String((await request.json()).text || "").trim().slice(0, 2000);
+    if (!text) throw httpError(400, "Write the idea first");
+    const ideas = (await getJson(B, ideasKey(id))) || [];
+    ideas.push({ id: newId(Date.now()), t: Date.now(), text, seen: 0 });
+    await putJson(B, ideasKey(id), ideas.slice(-100));
+    return json(ideas, 201);
+  }
+
+  // GET /api/jobs/:id/ideas
+  if (parts[2] === "ideas" && parts.length === 3 && method === "GET") {
+    return json((await getJson(B, ideasKey(id))) || []);
+  }
+
+  // POST /api/jobs/:id/ideas/seen  {ids}  — agent: Claude has been given these
+  if (parts[2] === "ideas" && parts[3] === "seen" && method === "POST") {
+    const ids = new Set((await request.json()).ids || []);
+    const ideas = (await getJson(B, ideasKey(id))) || [];
+    for (const i of ideas) if (ids.has(i.id) && !i.seen) i.seen = Date.now();
+    await putJson(B, ideasKey(id), ideas);
+    return json(ideas);
   }
 
   // DELETE /api/jobs/:id
@@ -111,6 +139,17 @@ async function api(request, env, url) {
     if (!STATUSES.includes(body.status)) throw httpError(400, "Bad status");
     job.status = body.status;
     job.message = String(body.message || "").slice(0, 4000);
+    if (Array.isArray(body.caps)) job.caps = body.caps.slice(0, 10).map(String); // what this run supports (ideas, previews)
+    job.updated = Date.now();
+    await putJson(B, jobKey(id), job);
+    return json(job);
+  }
+
+  // POST /api/jobs/:id/local-files  {files:[{name, size}]}  — what a PC-side job contains, for display
+  if (parts[2] === "local-files" && method === "POST") {
+    const body = await request.json();
+    job.localFiles = (Array.isArray(body.files) ? body.files : []).slice(0, 500)
+      .map((f) => ({ name: String(f.name || "").slice(0, 200), size: Number(f.size) || 0 }));
     job.updated = Date.now();
     await putJson(B, jobKey(id), job);
     return json(job);
@@ -173,7 +212,7 @@ async function api(request, env, url) {
       name,
       size: Number(body.size) || 0,
       type,
-      role: ["output", "frame"].includes(body.role) ? body.role : "input",
+      role: ["output", "frame", "preview"].includes(body.role) ? body.role : "input",
       uploadId: mp.uploadId,
       done: false,
       created: Date.now(),
@@ -268,6 +307,7 @@ function cleanId(s) {
 const jobKey = (id) => `jobs/${id}/job.json`;
 const metaKey = (id, fid) => `jobs/${id}/meta/${fid}.json`;
 const activityKey = (id) => `jobs/${id}/activity.json`;
+const ideasKey = (id) => `jobs/${id}/ideas.json`;
 
 async function listJobIds(B) {
   const ids = [];
