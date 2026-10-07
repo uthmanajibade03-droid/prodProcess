@@ -4,9 +4,10 @@
 // Run: node agent/agent.mjs        (config in agent/config.json — see config.example.json)
 
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join, dirname, extname } from "node:path";
+import { join, dirname, extname, basename, relative, sep } from "node:path";
+import { homedir } from "node:os";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
@@ -50,10 +51,10 @@ async function download(jobId, file, dest) {
   if (got !== file.size) throw new Error(`${file.name}: got ${got} bytes, expected ${file.size}`);
 }
 
-async function upload(jobId, path, name) {
+async function upload(jobId, path, name, role = "output") {
   const { size } = await stat(path);
-  const type = { ".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/mp4", ".txt": "text/plain", ".md": "text/plain" }[extname(name).toLowerCase()] || "application/octet-stream";
-  const meta = await post(`/api/jobs/${jobId}/files`, { name, size, type, role: "output" });
+  const type = { ".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/mp4", ".txt": "text/plain", ".md": "text/plain", ".jpg": "image/jpeg" }[extname(name).toLowerCase()] || "application/octet-stream";
+  const meta = await post(`/api/jobs/${jobId}/files`, { name, size, type, role });
   const fh = await open(path, "r");
   const parts = [];
   try {
@@ -77,6 +78,74 @@ async function upload(jobId, path, name) {
     await fh.close();
   }
   await post(`/api/jobs/${jobId}/files/${meta.id}/complete`, { parts });
+  return meta;
+}
+
+// "See what Claude sees": any image Claude writes in the job folder during a run
+// (frames it grabs to check its work) gets shrunk and posted into the live feed.
+const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const MAX_FRAMES_PER_RUN = 80;
+
+function watchFrames(dir, jobId, feed, since) {
+  const sizes = new Map(); // path -> size last scan (wait for it to stop growing)
+  const sent = new Set();
+  let busy = false;
+  let count = 0;
+  const thumbDir = join(dir, ".thumbs");
+
+  const scan = async () => {
+    if (busy || count >= MAX_FRAMES_PER_RUN) return;
+    busy = true;
+    try {
+      const all = await readdir(dir, { recursive: true });
+      for (const rel of all) {
+        if (count >= MAX_FRAMES_PER_RUN) break;
+        if (rel.startsWith("in" + sep) || rel.startsWith(".thumbs")) continue;
+        if (!IMAGE_EXT.has(extname(rel).toLowerCase())) continue;
+        const path = join(dir, rel);
+        if (sent.has(path)) continue;
+        const st = await stat(path).catch(() => null);
+        if (!st || st.mtimeMs < since || st.size === 0) continue;
+        if (sizes.get(path) !== st.size) { sizes.set(path, st.size); continue; } // still being written
+        sent.add(path);
+        await mkdir(thumbDir, { recursive: true });
+        const thumb = join(thumbDir, `${count}_${basename(rel, extname(rel))}.jpg`);
+        const ok = await new Promise((res) => {
+          const ff = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-i", path,
+            "-vf", "scale='min(720,iw)':-2", "-q:v", "5", "-frames:v", "1", thumb], { windowsHide: true });
+          ff.on("error", () => res(false));
+          ff.on("close", (c) => res(c === 0));
+        });
+        if (!ok) continue;
+        const meta = await upload(jobId, thumb, basename(rel), "frame");
+        feed.add("img", `${meta.id}|${relative(dir, path).split(sep).join("/")}`);
+        count++;
+      }
+    } catch (e) {
+      log("frames:", e.message);
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(scan, 3000);
+  return {
+    stop: async () => {
+      clearInterval(timer);
+      while (busy) await new Promise((r) => setTimeout(r, 200));
+      await scan(); // pick up anything written in the last seconds
+      await scan();
+    },
+  };
+}
+
+// Claude Code keeps conversations per folder; reuse it for revisions so Claude remembers the first edit.
+function hasClaudeSession(dir) {
+  const folder = join(homedir(), ".claude", "projects", dir.replace(/[^A-Za-z0-9]/g, "-"));
+  try {
+    return readdirSync(folder).some((n) => n.endsWith(".jsonl"));
+  } catch {
+    return false;
+  }
 }
 
 // Turn one tool call from Claude into a short plain-English line for the live feed.
@@ -98,13 +167,13 @@ function describeTool(name, input = {}) {
 }
 
 // Runs Claude in the job folder. Steps stream into the live feed (onStep) and claude.log.
-function runClaude(cwd, prompt, logPath, onTick, onStep) {
+function runClaude(cwd, prompt, logPath, onTick, onStep, extraArgs = []) {
   return new Promise((resolve) => {
     const out = createWriteStream(logPath, { flags: "a" });
-    out.write(`\n===== ${new Date().toISOString()} =====\n`);
+    out.write(`\n===== ${new Date().toISOString()} ${extraArgs.join(" ")} =====\n`);
     const child = spawn(
       CLAUDE,
-      ["-p", "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,Skill,TodoWrite", "--output-format", "stream-json", "--verbose"],
+      [...extraArgs, "-p", "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,Skill,TodoWrite", "--output-format", "stream-json", "--verbose"],
       { cwd, windowsHide: true },
     );
     child.stdin.end(prompt);
@@ -144,7 +213,7 @@ function runClaude(cwd, prompt, logPath, onTick, onStep) {
 }
 
 // Batches live-feed lines and sends them every few seconds, in order.
-function liveFeed(jobId) {
+function liveFeed(jobId, runLabel) {
   let pending = [];
   let first = true;
   let chain = Promise.resolve();
@@ -154,7 +223,7 @@ function liveFeed(jobId) {
     const newRun = first;
     pending = [];
     first = false;
-    chain = chain.then(() => post(`/api/jobs/${jobId}/activity`, { entries, newRun }).catch((e) => log("feed:", e.message)));
+    chain = chain.then(() => post(`/api/jobs/${jobId}/activity`, { entries, newRun, runLabel }).catch((e) => log("feed:", e.message)));
     return chain;
   };
   const timer = setInterval(flush, 3000);
@@ -171,7 +240,28 @@ function editPrompt(job) {
 - If one of your video-editing skills fits the request (for example editor-vlog, editor-tayst, editor-arabiccompanion), use it. Otherwise edit with ffmpeg.
 - Work only inside this folder. Never delete or modify anything in ./in.
 - Put the finished video in ./out as an .mp4 (H.264 + AAC, so it plays on an iPhone). Keep the source resolution unless the note says otherwise.
+- Whenever you grab still frames to check your work, save them as .jpg in ./frames (e.g. ffmpeg -ss 12 -i out/x.mp4 -frames:v 1 frames/12s-title.jpg). They appear live on Uthman's phone, so he sees what you see. Name them so the name says what you were checking.
 - Last, write ./out/NOTES.txt: 3–6 short plain lines on what you made and any choices you had to guess. That text is shown on the phone.
+
+Job: "${job.title}"`;
+}
+
+const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+function revisionMarkdown(rev, round) {
+  return `# Changes for round ${round}\n\nWatched: ${rev.video || "the latest video in ./out"}\n\n` +
+    (rev.notes.length ? `## At specific moments\n${rev.notes.map((n) => `- **${clock(n.t)}** — ${n.text}`).join("\n")}\n\n` : "") +
+    (rev.general ? `## Overall\n${rev.general}\n` : "");
+}
+
+function revisionPrompt(job, round, file, previous) {
+  return `Revision round ${round} of a video already edited in this folder. Nobody is watching this run, so do not ask questions — make sensible choices and finish.
+
+- Uthman watched ${previous || "the latest video in ./out"} and wants changes. They are in ${file}. Timestamps (m:ss) refer to that video.
+- The original request is still in NOTE.md and the raw footage in ./in. Reuse your earlier work and scripts in this folder where it helps.
+- Save the new version as a NEW file in ./out ending in _v${round}.mp4 (H.264 + AAC). Do not delete or overwrite earlier versions. Never touch ./in.
+- Save any frames you grab to check the changes as .jpg in ./frames — they show live on his phone.
+- Last, rewrite ./out/NOTES.txt: 3–6 short plain lines on what you changed this round, one per note he left.
 
 Job: "${job.title}"`;
 }
@@ -204,22 +294,51 @@ async function processJob(job) {
     `# ${job.title}\n\n${job.note || "(no note — make a clean, well-paced edit of the footage)"}\n\n## Files\n${inputs.map((f) => `- ${f.name} (${(f.size / 1048576).toFixed(1)} MB)`).join("\n")}\n`,
   );
 
-  await setStatus(job.id, "editing", "Started");
-  const feed = liveFeed(job.id);
-  feed.add("sys", `Footage on the PC (${inputs.length} files). Starting Claude.`);
+  // A job with change requests is a revision: Claude continues its earlier session on the latest round.
+  const rev = (full.revisions || []).at(-1);
+  const round = rev ? rev.n + 1 : 1;
+  let prompt = editPrompt(job);
+  let extraArgs = [];
+  if (rev) {
+    const file = `REVISION-${round}.md`;
+    await writeFile(join(dir, file), revisionMarkdown(rev, round));
+    prompt = revisionPrompt(job, round, file, rev.video);
+    if (hasClaudeSession(dir)) extraArgs = ["--continue"];
+  }
+
+  const videosNow = async () => {
+    const m = new Map();
+    for (const n of await readdir(outDir)) {
+      if (VIDEO_EXT.has(extname(n).toLowerCase())) m.set(n, (await stat(join(outDir, n))).mtimeMs);
+    }
+    return m;
+  };
+  const before = await videosNow();
+  const runStart = Date.now();
+
+  await setStatus(job.id, "editing", rev ? `Round ${round}: making your changes` : "Started");
+  const feed = liveFeed(job.id, rev ? `Round ${round} — your changes` : "Edit");
+  feed.add("sys", rev
+    ? `Round ${round}: ${rev.notes.length} timed note${rev.notes.length === 1 ? "" : "s"}${rev.general ? " + overall note" : ""}. ${extraArgs.length ? "Claude picks up where it left off." : "Starting Claude."}`
+    : `Footage on the PC (${inputs.length} files). Starting Claude.`);
+  const frames = watchFrames(dir, job.id, feed, runStart);
   const { code } = await runClaude(
     dir,
-    editPrompt(job),
+    prompt,
     join(dir, "claude.log"),
-    (min) => setStatus(job.id, "editing", `${min} min in`).catch(() => {}),
+    (min) => setStatus(job.id, "editing", `${rev ? `Round ${round} · ` : ""}${min} min in`).catch(() => {}),
     feed.add,
+    extraArgs,
   );
+  await frames.stop();
   feed.add("sys", code === 0 ? "Claude finished." : `Claude stopped (exit ${code}).`);
   await feed.close();
 
-  const outFiles = (await readdir(outDir)).filter((n) => VIDEO_EXT.has(extname(n).toLowerCase()));
+  // Only send back videos that are new or changed in this run.
+  const after = await videosNow();
+  const outFiles = [...after].filter(([n, t]) => !before.has(n) || t > before.get(n)).map(([n]) => n);
   if (!outFiles.length) {
-    throw new Error(`Claude finished (exit ${code}) but no video in out/. See claude.log in ${dir}`);
+    throw new Error(`Claude finished (exit ${code}) but made no new video in out/. See claude.log in ${dir}`);
   }
 
   await setStatus(job.id, "sending", `${outFiles.length} video${outFiles.length > 1 ? "s" : ""}`);

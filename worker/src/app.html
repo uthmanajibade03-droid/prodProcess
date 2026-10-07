@@ -90,6 +90,16 @@
   .f-do .f-x::before { content: "› "; color: var(--accent); }
   .f-sys .f-x { color: #71717a; font-style: italic; }
   .f-run { text-align: center; color: #52525b; font-size: 12px; margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .06em; }
+  .f-img img { display: block; width: 100%; max-width: 360px; border-radius: 8px; border: 1px solid var(--line); background: #000; }
+  .f-img .cap { display: block; color: #71717a; font-size: 12px; margin-top: 4px; }
+  .review { margin-top: 14px; }
+  .noterow { display: flex; gap: 8px; align-items: center; }
+  .ts { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; font-size: 14px; }
+  button.ts { background: none; padding: 0 4px 0 0; border-radius: 0; }
+  .earlier { margin-top: 14px; }
+  .earlier summary { cursor: pointer; font-weight: 600; }
+  .ver { margin-top: 12px; }
+  .ver video { margin: 6px 0 8px; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -308,6 +318,7 @@ async function viewJob(id) {
       <div class="feed" id="feed"></div></details>
     <div id="bottom"></div>`;
   let status = null, lastSeq = 0, steps = 0;
+  const revDraft = { notes: [], general: "" }; // survives re-renders
 
   const loadFeed = async () => {
     clearTimeout(liveTimer);
@@ -317,7 +328,7 @@ async function viewJob(id) {
     const box = document.getElementById("live"), feed = document.getElementById("feed");
     if (data.entries.length) {
       const atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
-      feed.insertAdjacentHTML("beforeend", data.entries.map(feedLine).join(""));
+      feed.insertAdjacentHTML("beforeend", data.entries.map((e) => feedLine(e, id)).join(""));
       steps += data.entries.filter((e) => e.k === "do").length;
       lastSeq = data.seq;
       if (atEnd || box.dataset.fresh) feed.scrollTop = feed.scrollHeight;
@@ -328,7 +339,7 @@ async function viewJob(id) {
     const title = document.getElementById("liveTitle");
     title.textContent = live ? "● Live — what Claude is doing" : "What Claude did";
     title.className = live ? "livedot" : "";
-    document.getElementById("liveCount").textContent = steps ? `${steps} steps` : "";
+    document.getElementById("liveCount").textContent = steps ? `${steps} step${steps === 1 ? "" : "s"}` : "";
     if (BUSY.includes(status)) liveTimer = setTimeout(loadFeed, 3000);
   };
 
@@ -348,7 +359,7 @@ async function viewJob(id) {
 
     const inputs = job.files.filter((f) => f.role === "input");
     const outputs = job.files.filter((f) => f.role === "output" && f.done);
-    const videos = outputs.filter((f) => /\.(mp4|mov|m4v)$/i.test(f.name));
+    const videos = outputs.filter((f) => /\.(mp4|mov|m4v)$/i.test(f.name)).sort((a, b) => b.created - a.created);
     const others = outputs.filter((f) => !videos.includes(f));
     const fileUrl = (f) => `/api/jobs/${id}/files/${f.id}`;
     const step = { uploading: "Still sending from the phone.", ready: "Waiting for the PC to pick it up.",
@@ -362,16 +373,24 @@ async function viewJob(id) {
       ${step ? `<div class="card" style="margin-top:14px">${step}${job.message ? `<div class="meta">${esc(job.message)}</div>` : ""}</div>` : ""}
       ${job.status === "failed" ? `<div class="card" style="margin-top:14px"><div class="err" style="margin:0">${esc(job.message || "Something went wrong.")}</div>
         <button class="ghost small" id="retry" style="margin-top:10px">Try again</button></div>` : ""}
-      ${videos.map((f) => `<h2>Finished</h2><video src="${fileUrl(f)}" controls playsinline preload="metadata"></video>
-        <div class="actions" style="margin-top:10px"><a class="btn ghost" href="${fileUrl(f)}?download">Download ${esc(size(f.size))}</a></div>`).join("")}
+      ${videos.length ? `<h2>${videos.length > 1 ? `Latest · version ${videos.length}` : "Finished"}</h2>
+        <video id="mainVideo" src="${fileUrl(videos[0])}" controls playsinline preload="metadata"></video>
+        <div class="actions" style="margin-top:10px"><a class="btn ghost" href="${fileUrl(videos[0])}?download">Download ${esc(size(videos[0].size))}</a></div>
+        ${["done", "failed"].includes(job.status) ? reviewPanel() : ""}
+        ${videos.length > 1 ? `<details class="card earlier"><summary>Earlier versions (${videos.length - 1})</summary>
+          ${videos.slice(1).map((f, i) => `<div class="ver"><div class="meta">Version ${videos.length - 1 - i} · ${esc(f.name)}</div>
+            <video src="${fileUrl(f)}" controls playsinline preload="none"></video>
+            <a class="btn ghost small" href="${fileUrl(f)}?download">Download ${esc(size(f.size))}</a></div>`).join("")}</details>` : ""}` : ""}
       ${job.status === "done" && job.message ? `<h2>Notes from Claude</h2><div class="card note">${esc(job.message)}</div>` : ""}
       ${others.length ? `<h2>Other files</h2><div class="card">${others.map((f) => `<div class="file"><a class="name" style="color:var(--accent)" href="${fileUrl(f)}">${esc(f.name)}</a><span class="size">${size(f.size)}</span></div>`).join("")}</div>` : ""}
       <div style="height:14px"></div>`;
     document.getElementById("bottom").innerHTML = `
       ${job.note ? `<h2>Your note</h2><div class="card note">${esc(job.note)}</div>` : ""}
+      ${(job.revisions || []).map((r) => `<h2>Round ${r.n + 1} changes</h2><div class="card note">${r.notes.map((n) => `<b class="ts">${clock(n.t)}</b> ${esc(n.text)}`).join("\n")}${r.general ? (r.notes.length ? "\n\n" : "") + esc(r.general) : ""}</div>`).join("")}
       <h2>Sent footage</h2>
       <div class="card">${inputs.map((f) => `<div class="file"><span class="name">${esc(f.name)}</span><span class="size">${f.done ? size(f.size) : "incomplete"}</span></div>`).join("") || `<div class="meta">None</div>`}</div>
       <button class="danger" id="del" style="margin-top:24px;width:100%">Delete job</button>`;
+    wireReview(id, revDraft, videos[0], load);
     const retry = document.getElementById("retry");
     if (retry) retry.onclick = async () => { await api(`/api/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "ready", message: "" }) }); load(); };
     document.getElementById("del").onclick = async () => {
@@ -383,9 +402,86 @@ async function viewJob(id) {
   load();
 }
 
-function feedLine(e) {
+const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+function reviewPanel() {
+  return `<div class="card review" id="review">
+    <div class="title">Want changes?</div>
+    <div class="hint" style="margin-top:2px">Pause on the moment, then tap the button. Add as many as you like.</div>
+    <button class="ghost" id="addAt" style="width:100%;margin-top:12px">＋ Note at 0:00</button>
+    <div id="noteRow" hidden style="margin-top:10px">
+      <div class="noterow"><span class="ts" id="noteTs">0:00</span>
+        <input id="noteText" type="text" placeholder="e.g. cut this bit, music louder here" autocomplete="off"></div>
+      <div class="actions" style="margin-top:8px"><button class="ghost small" id="noteCancel">Cancel</button><button class="primary small" id="noteAdd">Add note</button></div>
+    </div>
+    <div id="notesList" style="margin-top:8px"></div>
+    <textarea id="general" placeholder="Anything else overall? (optional)" style="min-height:70px;margin-top:8px"></textarea>
+    <button class="primary" id="sendRev" style="margin-top:10px" disabled>Send changes</button>
+    <div class="err" id="revErr" hidden></div>
+  </div>`;
+}
+
+function wireReview(jobId, draft, latest, reload) {
+  const $ = (i) => document.getElementById(i);
+  if (!$("review")) return;
+  const video = $("mainVideo");
+  let pendingT = 0;
+  const draw = () => {
+    $("notesList").innerHTML = draft.notes.map((n, i) => `<div class="file"><span class="name"><button class="ts seek" data-t="${n.t}">${clock(n.t)}</button> ${esc(n.text)}</span>
+      <button class="x" data-i="${i}" aria-label="Remove">×</button></div>`).join("");
+    $("notesList").querySelectorAll(".x").forEach((b) => b.addEventListener("click", () => { draft.notes.splice(+b.dataset.i, 1); draw(); }));
+    $("notesList").querySelectorAll(".seek").forEach((b) => b.addEventListener("click", () => { video.currentTime = +b.dataset.t; video.pause(); }));
+    $("sendRev").disabled = !draft.notes.length && !draft.general.trim();
+  };
+  const label = () => { $("addAt").textContent = `＋ Note at ${clock(video.currentTime || 0)}`; };
+  video.addEventListener("timeupdate", label);
+  video.addEventListener("seeked", label);
+  $("general").value = draft.general;
+  $("general").addEventListener("input", (e) => { draft.general = e.target.value; draw(); });
+  $("addAt").addEventListener("click", () => {
+    video.pause();
+    pendingT = Math.round((video.currentTime || 0) * 10) / 10;
+    $("noteTs").textContent = clock(pendingT);
+    $("noteRow").hidden = false;
+    $("noteText").focus();
+  });
+  const add = () => {
+    const text = $("noteText").value.trim();
+    if (!text) return;
+    draft.notes.push({ t: pendingT, text });
+    draft.notes.sort((a, b) => a.t - b.t);
+    $("noteText").value = "";
+    $("noteRow").hidden = true;
+    draw();
+  };
+  $("noteAdd").addEventListener("click", add);
+  $("noteText").addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+  $("noteCancel").addEventListener("click", () => { $("noteText").value = ""; $("noteRow").hidden = true; });
+  $("sendRev").addEventListener("click", async () => {
+    $("sendRev").disabled = true;
+    $("sendRev").textContent = "Sending…";
+    try {
+      await api(`/api/jobs/${jobId}/revise`, { method: "POST", body: JSON.stringify({ notes: draft.notes, general: draft.general, video: latest.name }) });
+      draft.notes = []; draft.general = "";
+      reload();
+    } catch (e) {
+      $("revErr").textContent = e.message; $("revErr").hidden = false;
+      $("sendRev").textContent = "Send changes"; draw();
+    }
+  });
+  label();
+  draw();
+}
+
+function feedLine(e, jobId) {
   const time = new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (e.k === "run") return `<div class="f-run">${esc(e.x)} · ${time}</div>`;
+  if (e.k === "img") {
+    const [fid, ...rest] = e.x.split("|");
+    const src = `/api/jobs/${jobId}/files/${encodeURIComponent(fid)}`;
+    return `<div class="f f-img"><span class="f-t">${time}</span><a class="f-x" href="${src}" target="_blank" rel="noopener">
+      <img src="${src}" loading="lazy" alt=""><span class="cap">${esc(rest.join("|"))}</span></a></div>`;
+  }
   return `<div class="f f-${esc(e.k)}"><span class="f-t">${time}</span><span class="f-x">${esc(e.x)}</span></div>`;
 }
 

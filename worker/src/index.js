@@ -116,13 +116,33 @@ async function api(request, env, url) {
     return json(job);
   }
 
+  // POST /api/jobs/:id/revise  {notes:[{t, text}], general}  — changes requested on the finished video
+  if (parts[2] === "revise" && method === "POST") {
+    if (!["done", "failed"].includes(job.status)) throw httpError(409, "Wait until the current edit finishes");
+    const body = await request.json();
+    const notes = (Array.isArray(body.notes) ? body.notes : [])
+      .slice(0, 60)
+      .map((n) => ({ t: Math.max(0, Number(n.t) || 0), text: String(n.text || "").trim().slice(0, 1000) }))
+      .filter((n) => n.text)
+      .sort((a, b) => a.t - b.t);
+    const general = String(body.general || "").trim().slice(0, 4000);
+    if (!notes.length && !general) throw httpError(400, "Add at least one note");
+    job.revisions = job.revisions || [];
+    job.revisions.push({ n: job.revisions.length + 1, at: Date.now(), video: String(body.video || "").slice(0, 200), notes, general });
+    job.status = "ready";
+    job.message = `Changes requested (round ${job.revisions.length + 1})`;
+    job.updated = Date.now();
+    await putJson(B, jobKey(id), job);
+    return json(job);
+  }
+
   // POST /api/jobs/:id/activity  {entries:[{k, x}], newRun?}  — live feed of what Claude is doing
   if (parts[2] === "activity" && method === "POST") {
     const body = await request.json();
     const feed = (await getJson(B, activityKey(id))) || { seq: 0, entries: [] };
     const now = Date.now();
     const incoming = [
-      ...(body.newRun ? [{ k: "run", x: "New run" }] : []),
+      ...(body.newRun ? [{ k: "run", x: String(body.runLabel || "New run") }] : []),
       ...(Array.isArray(body.entries) ? body.entries : []),
     ];
     for (const e of incoming) {
@@ -153,7 +173,7 @@ async function api(request, env, url) {
       name,
       size: Number(body.size) || 0,
       type,
-      role: body.role === "output" ? "output" : "input",
+      role: ["output", "frame"].includes(body.role) ? body.role : "input",
       uploadId: mp.uploadId,
       done: false,
       created: Date.now(),
