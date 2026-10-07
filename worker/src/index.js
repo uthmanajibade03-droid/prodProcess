@@ -185,7 +185,7 @@ async function api(request, env, url) {
       ...(Array.isArray(body.entries) ? body.entries : []),
     ];
     for (const e of incoming) {
-      feed.entries.push({ s: ++feed.seq, t: e.t || now, k: String(e.k || "say").slice(0, 10), x: String(e.x || "").slice(0, 600) });
+      feed.entries.push({ s: ++feed.seq, t: e.t || now, k: String(e.k || "say").slice(0, 10), x: String(e.x || "").slice(0, 4000) });
     }
     feed.entries = feed.entries.slice(-400);
     await putJson(B, activityKey(id), feed);
