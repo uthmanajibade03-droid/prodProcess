@@ -1,0 +1,1 @@
+{"version":"0.0.1","configurations":[{"name":"relay-local","runtimeExecutable":"npx","runtimeArgs":["--yes","wrangler@latest","dev","--config","worker/wrangler.toml","--port","8787"],"port":8787}]}

@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>prodProcess</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Studio">
+<meta name="theme-color" content="#0e0e10">
+<style>
+  :root {
+    --bg: #0e0e10; --card: #18181b; --line: #27272a; --text: #f4f4f5; --dim: #a1a1aa;
+    --accent: #f97316; --ok: #22c55e; --bad: #ef4444; --wait: #eab308;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto;
+    padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 32px); }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; min-height: 40px; }
+  h1 { font-size: 24px; margin: 0; letter-spacing: -0.02em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 24px 0 8px; font-weight: 600; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .stack > * + * { margin-top: 10px; }
+  label { display: block; font-size: 14px; color: var(--dim); margin-bottom: 6px; }
+  input[type=text], input[type=password], textarea {
+    width: 100%; background: #0b0b0d; color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; font: inherit; font-size: 16px; }
+  textarea { min-height: 120px; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+  button, .btn { appearance: none; border: 0; border-radius: 12px; padding: 14px 16px; font: inherit;
+    font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    gap: 8px; text-decoration: none; }
+  .primary { background: var(--accent); color: #111; width: 100%; font-size: 17px; }
+  .primary:disabled { opacity: .45; }
+  .ghost { background: #232326; color: var(--text); }
+  .small { padding: 8px 12px; font-size: 14px; border-radius: 10px; }
+  .danger { background: transparent; color: var(--bad); }
+  .back { background: none; color: var(--accent); padding: 8px 0; font-weight: 600; }
+  .pick { border: 1.5px dashed #3f3f46; border-radius: 14px; padding: 22px 14px; text-align: center;
+    color: var(--dim); display: block; cursor: pointer; }
+  .pick strong { color: var(--text); display: block; font-size: 17px; margin-bottom: 2px; }
+  .pick input { display: none; }
+  .file { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 15px; }
+  .file:first-child { border-top: 0; }
+  .file .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file .size { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .x { background: none; color: var(--dim); padding: 0 4px; font-size: 18px; line-height: 1; }
+  .job { display: block; color: inherit; text-decoration: none; }
+  .job + .job { margin-top: 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--dim); font-size: 14px; }
+  .chip { font-size: 12px; font-weight: 700; padding: 4px 9px; border-radius: 999px; white-space: nowrap;
+    background: #27272a; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+  .chip.done { background: rgba(34,197,94,.15); color: var(--ok); }
+  .chip.failed { background: rgba(239,68,68,.15); color: var(--bad); }
+  .chip.busy { background: rgba(234,179,8,.15); color: var(--wait); }
+  .chip.busy::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; margin-right: 6px; vertical-align: 1px; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .bar { height: 8px; background: #27272a; border-radius: 99px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .progress-text { display: flex; justify-content: space-between; font-size: 14px; color: var(--dim);
+    margin-top: 6px; font-variant-numeric: tabular-nums; }
+  video { width: 100%; border-radius: 12px; background: #000; display: block; }
+  .note { white-space: pre-wrap; font-size: 15px; }
+  .empty { text-align: center; color: var(--dim); padding: 40px 10px; }
+  .err { color: var(--bad); font-size: 14px; margin-top: 8px; }
+  .hint { color: var(--dim); font-size: 13px; margin-top: 8px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .actions > * { flex: 1; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+
+<script>
+const PART = 50 * 1024 * 1024; // must match for every part except the last
+const BUSY = ["ready", "downloading", "editing", "sending"];
+const LABEL = { uploading: "Sending", ready: "Queued", downloading: "To PC", editing: "Editing",
+  sending: "Returning", done: "Done", failed: "Failed" };
+const app = document.getElementById("app");
+let pollTimer = null;
+let draft = { title: "", note: "", files: [] };
+let sending = false;
+
+// ---------- api ----------
+async function api(path, opts = {}) {
+  const res = await fetch(path, { credentials: "same-origin", ...opts,
+    headers: opts.body && !(opts.body instanceof Blob) ? { "content-type": "application/json", ...(opts.headers || {}) } : opts.headers });
+  if (res.status === 401 && path !== "/api/login") { route("#/login"); throw new Error("Not signed in"); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+
+// ---------- helpers ----------
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function size(n) {
+  if (!n) return "0 MB";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  if (n < 1024 ** 3) return (n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+  return (n / 1024 ** 3).toFixed(2) + " GB";
+}
+function ago(t) {
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+const chip = (st) => `<span class="chip ${st === "done" ? "done" : st === "failed" ? "failed" : BUSY.includes(st) || st === "uploading" ? "busy" : ""}">${LABEL[st] || st}</span>`;
+function route(h) { if (location.hash !== h) location.hash = h; else render(); }
+function stopPoll() { clearTimeout(pollTimer); pollTimer = null; }
+
+// ---------- views ----------
+async function render() {
+  stopPoll();
+  const h = location.hash || "#/";
+  if (h === "#/login") return viewLogin();
+  if (h === "#/new") return viewNew();
+  const m = h.match(/^#\/job\/([a-z0-9-]+)$/);
+  if (m) return viewJob(m[1]);
+  return viewList();
+}
+
+function viewLogin() {
+  app.innerHTML = `
+    <header><h1>prodProcess</h1></header>
+    <div class="card stack">
+      <div><label for="code">Access code</label>
+      <input id="code" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+      <button class="primary" id="go">Sign in</button>
+      <div class="err" id="err" hidden></div>
+    </div>`;
+  const go = async () => {
+    try {
+      await api("/api/login", { method: "POST", body: JSON.stringify({ token: document.getElementById("code").value }) });
+      route("#/");
+    } catch (e) { const el = document.getElementById("err"); el.textContent = e.message; el.hidden = false; }
+  };
+  document.getElementById("go").onclick = go;
+  document.getElementById("code").onkeydown = (e) => e.key === "Enter" && go();
+}
+
+async function viewList() {
+  app.innerHTML = `
+    <header><h1>Jobs</h1></header>
+    <a class="btn primary" href="#/new">＋ New job</a>
+    <h2>Recent</h2>
+    <div id="jobs"><div class="empty">Loading…</div></div>`;
+  const load = async () => {
+    let jobs;
+    try { ({ jobs } = await api("/api/jobs")); } catch { return; }
+    if (location.hash && location.hash !== "#/") return;
+    const el = document.getElementById("jobs");
+    el.innerHTML = jobs.length ? jobs.map((j) => `
+      <a class="card job" href="#/job/${j.id}">
+        <div class="row"><div class="title">${esc(j.title)}</div>${chip(j.status)}</div>
+        <div class="meta">${ago(j.created)}${j.status === "failed" && j.message ? " · " + esc(j.message.slice(0, 60)) : ""}</div>
+      </a>`).join("") : `<div class="empty">No jobs yet. Tap <b>New job</b> to send footage.</div>`;
+    if (jobs.some((j) => BUSY.includes(j.status))) pollTimer = setTimeout(load, 6000);
+  };
+  load();
+}
+
+function viewNew() {
+  app.innerHTML = `
+    <header><button class="back" onclick="history.back()">‹ Jobs</button></header>
+    <h1>New job</h1>
+    <div class="stack" style="margin-top:16px">
+      <div><label for="title">Name</label>
+        <input id="title" type="text" placeholder="e.g. Basketball — older vs younger" value="${esc(draft.title)}"></div>
+      <div><label for="note">What do you want?</label>
+        <textarea id="note" placeholder="e.g. 2–3 min recap, upbeat music, use my voice memo as the voiceover, captions on.">${esc(draft.note)}</textarea></div>
+      <label class="pick"><input id="pick" type="file" multiple accept="video/*,audio/*,image/*,.m4a,.mp3,.wav,.mov,.mp4">
+        <strong>＋ Add clips &amp; audio</strong>Videos, voice memos, photos</label>
+      <div class="card" id="list" hidden></div>
+      <div id="prog" hidden><div class="bar"><i id="barfill"></i></div>
+        <div class="progress-text"><span id="ptext"></span><span id="ppct"></span></div>
+        <div class="hint">Keep this screen open until it says sent.</div></div>
+      <button class="primary" id="send">Send to PC</button>
+      <div class="err" id="err" hidden></div>
+    </div>`;
+  const $ = (id) => document.getElementById(id);
+  $("title").oninput = (e) => (draft.title = e.target.value);
+  $("note").oninput = (e) => (draft.note = e.target.value);
+  $("pick").onchange = (e) => { draft.files.push(...e.target.files); e.target.value = ""; drawFiles(); };
+  $("send").onclick = send;
+  drawFiles();
+}
+
+function drawFiles() {
+  const list = document.getElementById("list");
+  const btn = document.getElementById("send");
+  if (!list) return;
+  list.hidden = !draft.files.length;
+  const total = draft.files.reduce((a, f) => a + f.size, 0);
+  list.innerHTML = draft.files.map((f, i) => `
+    <div class="file"><span class="name">${esc(f.name)}</span>
+      <span><span class="size">${size(f.size)}</span>${sending ? "" : ` <button class="x" data-i="${i}" aria-label="Remove">×</button>`}</span></div>`).join("")
+    + (draft.files.length > 1 ? `<div class="file"><span class="name meta">${draft.files.length} files</span><span class="size">${size(total)}</span></div>` : "");
+  list.querySelectorAll(".x").forEach((b) => (b.onclick = () => { draft.files.splice(+b.dataset.i, 1); drawFiles(); }));
+  btn.disabled = sending || !draft.files.length;
+}
+
+async function send() {
+  const $ = (id) => document.getElementById(id);
+  const err = $("err");
+  err.hidden = true;
+  if (!draft.files.length) return;
+  sending = true; drawFiles();
+  $("send").textContent = "Sending…";
+  $("prog").hidden = false;
+  let lock = null;
+  try { lock = await navigator.wakeLock?.request("screen"); } catch {}
+
+  const total = draft.files.reduce((a, f) => a + f.size, 0);
+  let sent = 0;
+  const show = (label) => {
+    const pct = total ? Math.min(100, (sent / total) * 100) : 100;
+    $("barfill").style.width = pct + "%";
+    $("ptext").textContent = label;
+    $("ppct").textContent = `${size(sent)} / ${size(total)}`;
+  };
+  try {
+    // Reuse the job if a previous attempt failed part-way, skipping files already up.
+    if (!draft.jobId) {
+      const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({ title: draft.title, note: draft.note }) });
+      draft.jobId = job.id;
+      draft.doneIdx = new Set();
+    }
+    for (let i = 0; i < draft.files.length; i++) {
+      const f = draft.files[i];
+      if (draft.doneIdx.has(i)) { sent += f.size; continue; }
+      show(`File ${i + 1} of ${draft.files.length}`);
+      await uploadFile(draft.jobId, f, (n) => { sent += n; show(`File ${i + 1} of ${draft.files.length}`); });
+      draft.doneIdx.add(i);
+    }
+    await api(`/api/jobs/${draft.jobId}/status`, { method: "POST", body: JSON.stringify({ status: "ready" }) });
+    const id = draft.jobId;
+    draft = { title: "", note: "", files: [] };
+    sending = false;
+    route(`#/job/${id}`);
+  } catch (e) {
+    sending = false;
+    err.textContent = `Stopped: ${e.message}. Tap Send to carry on — finished files won't resend.`;
+    err.hidden = false;
+    $("send").textContent = "Send to PC";
+    drawFiles();
+  } finally {
+    lock?.release?.().catch(() => {});
+  }
+}
+
+async function uploadFile(jobId, file, onBytes) {
+  const meta = await api(`/api/jobs/${jobId}/files`, { method: "POST",
+    body: JSON.stringify({ name: file.name, size: file.size, type: file.type || "application/octet-stream", role: "input" }) });
+  const count = Math.max(1, Math.ceil(file.size / PART));
+  const parts = [];
+  for (let n = 1; n <= count; n++) {
+    const blob = file.slice((n - 1) * PART, Math.min(n * PART, file.size));
+    let lastErr;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/files/${meta.id}/parts/${n}`, { method: "PUT", body: blob, credentials: "same-origin" });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Upload error ${res.status}`);
+        parts.push(await res.json());
+        lastErr = null;
+        break;
+      } catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); }
+    }
+    if (lastErr) throw lastErr;
+    onBytes(blob.size);
+  }
+  await api(`/api/jobs/${jobId}/files/${meta.id}/complete`, { method: "POST", body: JSON.stringify({ parts }) });
+}
+
+async function viewJob(id) {
+  app.innerHTML = `<header><a class="back" href="#/">‹ Jobs</a></header><div id="body"><div class="empty">Loading…</div></div>`;
+  const load = async () => {
+    let job;
+    try { job = await api(`/api/jobs/${id}`); } catch (e) {
+      const b = document.getElementById("body"); if (b) b.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return;
+    }
+    if (location.hash !== `#/job/${id}`) return;
+    const inputs = job.files.filter((f) => f.role === "input");
+    const outputs = job.files.filter((f) => f.role === "output" && f.done);
+    const videos = outputs.filter((f) => /\.(mp4|mov|m4v)$/i.test(f.name));
+    const others = outputs.filter((f) => !videos.includes(f));
+    const fileUrl = (f) => `/api/jobs/${id}/files/${f.id}`;
+    const step = { uploading: "Still sending from the phone.", ready: "Waiting for the PC to pick it up.",
+      downloading: "PC is downloading the footage.", editing: "Claude is editing.", sending: "Sending the finished video back." }[job.status];
+    const body = document.getElementById("body");
+    const playing = body.querySelector("video");
+    if (playing && !playing.paused) { pollTimer = setTimeout(load, 6000); return; } // don't reset a playing video
+    body.innerHTML = `
+      <div class="row"><h1 style="font-size:22px">${esc(job.title)}</h1>${chip(job.status)}</div>
+      <div class="meta">${ago(job.created)}</div>
+      ${step ? `<div class="card" style="margin-top:14px">${step}${job.message ? `<div class="meta">${esc(job.message)}</div>` : ""}</div>` : ""}
+      ${job.status === "failed" ? `<div class="card" style="margin-top:14px"><div class="err" style="margin:0">${esc(job.message || "Something went wrong.")}</div>
+        <button class="ghost small" id="retry" style="margin-top:10px">Try again</button></div>` : ""}
+      ${videos.map((f) => `<h2>Finished</h2><video src="${fileUrl(f)}" controls playsinline preload="metadata"></video>
+        <div class="actions" style="margin-top:10px"><a class="btn ghost" href="${fileUrl(f)}?download">Download ${esc(size(f.size))}</a></div>`).join("")}
+      ${job.status === "done" && job.message ? `<h2>Notes from Claude</h2><div class="card note">${esc(job.message)}</div>` : ""}
+      ${others.length ? `<h2>Other files</h2><div class="card">${others.map((f) => `<div class="file"><a class="name" style="color:var(--accent)" href="${fileUrl(f)}">${esc(f.name)}</a><span class="size">${size(f.size)}</span></div>`).join("")}</div>` : ""}
+      ${job.note ? `<h2>Your note</h2><div class="card note">${esc(job.note)}</div>` : ""}
+      <h2>Sent footage</h2>
+      <div class="card">${inputs.map((f) => `<div class="file"><span class="name">${esc(f.name)}</span><span class="size">${f.done ? size(f.size) : "incomplete"}</span></div>`).join("") || `<div class="meta">None</div>`}</div>
+      <button class="danger" id="del" style="margin-top:24px;width:100%">Delete job</button>`;
+    const retry = document.getElementById("retry");
+    if (retry) retry.onclick = async () => { await api(`/api/jobs/${id}/status`, { method: "POST", body: JSON.stringify({ status: "ready", message: "" }) }); load(); };
+    document.getElementById("del").onclick = async () => {
+      if (!confirm("Delete this job and all its files from the cloud? Files already on the PC stay.")) return;
+      await api(`/api/jobs/${id}`, { method: "DELETE" }); route("#/");
+    };
+    if (BUSY.includes(job.status) || job.status === "uploading") pollTimer = setTimeout(load, 5000);
+  };
+  load();
+}
+
+window.addEventListener("hashchange", render);
+api("/api/me").then(() => render()).catch(() => {});
+</script>
+</body>
+</html>

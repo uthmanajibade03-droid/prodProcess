@@ -1,0 +1,6 @@
+agent/config.json
+agent.log
+jobs/
+node_modules/
+.wrangler/
+.dev.vars

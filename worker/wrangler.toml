@@ -1,0 +1,14 @@
+name = "prodprocess"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+rules = [
+  { type = "Text", globs = ["**/*.html"], fallthrough = true },
+  { type = "Data", globs = ["**/*.png"], fallthrough = true },
+]
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "prodprocess-media"
+
+# Secret (set with `wrangler secret put TOKEN`): the access code shared by the phone app and the PC agent.

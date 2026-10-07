@@ -1,0 +1,7 @@
+{
+  "server": "https://prodprocess.YOUR-SUBDOMAIN.workers.dev",
+  "token": "same access code you set with `wrangler secret put TOKEN`",
+  "jobsDir": "C:\\Users\\you\\Videos\\prodProcess-jobs",
+  "pollSeconds": 15,
+  "claudeCommand": "claude"
+}
