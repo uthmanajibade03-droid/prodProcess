@@ -74,6 +74,22 @@
   .hint { color: var(--dim); font-size: 13px; margin-top: 8px; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .actions > * { flex: 1; }
+  .livebox { padding: 0; overflow: hidden; }
+  .livebox summary { list-style: none; cursor: pointer; padding: 14px; display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .livebox summary::-webkit-details-marker { display: none; }
+  .livebox summary .meta { margin-left: auto; font-weight: 400; }
+  .livebox summary::after { content: "▾"; color: var(--dim); }
+  .livebox[open] summary::after { content: "▴"; }
+  .livedot { color: var(--accent); animation: pulse 1.6s infinite; }
+  .feed { max-height: 380px; overflow-y: auto; border-top: 1px solid var(--line); padding: 8px 14px 12px;
+    font-size: 14px; overscroll-behavior: contain; }
+  .f { display: flex; gap: 10px; padding: 5px 0; }
+  .f-t { color: #52525b; font-size: 12px; min-width: 56px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+  .f-x { flex: 1; white-space: pre-wrap; word-break: break-word; }
+  .f-do .f-x { color: var(--dim); }
+  .f-do .f-x::before { content: "› "; color: var(--accent); }
+  .f-sys .f-x { color: #71717a; font-style: italic; }
+  .f-run { text-align: center; color: #52525b; font-size: 12px; margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .06em; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -87,6 +103,7 @@ const LABEL = { uploading: "Sending", ready: "Queued", downloading: "To PC", edi
   sending: "Returning", done: "Done", failed: "Failed" };
 const app = document.getElementById("app");
 let pollTimer = null;
+let liveTimer = null;
 let draft = { title: "", note: "", files: [] };
 let sending = false;
 
@@ -117,7 +134,7 @@ function ago(t) {
 }
 const chip = (st) => `<span class="chip ${st === "done" ? "done" : st === "failed" ? "failed" : BUSY.includes(st) || st === "uploading" ? "busy" : ""}">${LABEL[st] || st}</span>`;
 function route(h) { if (location.hash !== h) location.hash = h; else render(); }
-function stopPoll() { clearTimeout(pollTimer); pollTimer = null; }
+function stopPoll() { clearTimeout(pollTimer); clearTimeout(liveTimer); pollTimer = liveTimer = null; }
 
 // ---------- views ----------
 async function render() {
@@ -135,7 +152,8 @@ function viewLogin() {
     <header><h1>prodProcess</h1></header>
     <div class="card stack">
       <div><label for="code">Access code</label>
-      <input id="code" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+      <input id="code" type="text" inputmode="text" placeholder="xxxx-xxxx" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+        style="font-size:22px;letter-spacing:.12em;text-align:center"></div>
       <button class="primary" id="go">Sign in</button>
       <div class="err" id="err" hidden></div>
     </div>`;
@@ -283,13 +301,50 @@ async function uploadFile(jobId, file, onBytes) {
 }
 
 async function viewJob(id) {
-  app.innerHTML = `<header><a class="back" href="#/">‹ Jobs</a></header><div id="body"><div class="empty">Loading…</div></div>`;
+  app.innerHTML = `<header><a class="back" href="#/">‹ Jobs</a></header>
+    <div id="top"><div class="empty">Loading…</div></div>
+    <details id="live" class="card livebox" hidden><summary><span id="liveTitle">Live</span><span class="meta" id="liveCount"></span></summary>
+      <div class="feed" id="feed"></div></details>
+    <div id="bottom"></div>`;
+  let status = null, lastSeq = 0, steps = 0;
+
+  const loadFeed = async () => {
+    clearTimeout(liveTimer);
+    let data;
+    try { data = await api(`/api/jobs/${id}/activity?after=${lastSeq}`); } catch { return; }
+    if (location.hash !== `#/job/${id}`) return;
+    const box = document.getElementById("live"), feed = document.getElementById("feed");
+    if (data.entries.length) {
+      const atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+      feed.insertAdjacentHTML("beforeend", data.entries.map(feedLine).join(""));
+      steps += data.entries.filter((e) => e.k === "do").length;
+      lastSeq = data.seq;
+      if (atEnd || box.dataset.fresh) feed.scrollTop = feed.scrollHeight;
+      delete box.dataset.fresh;
+    }
+    box.hidden = !lastSeq;
+    const live = status === "editing" || status === "sending";
+    const title = document.getElementById("liveTitle");
+    title.textContent = live ? "● Live — what Claude is doing" : "What Claude did";
+    title.className = live ? "livedot" : "";
+    document.getElementById("liveCount").textContent = steps ? `${steps} steps` : "";
+    if (BUSY.includes(status)) liveTimer = setTimeout(loadFeed, 3000);
+  };
+
   const load = async () => {
     let job;
     try { job = await api(`/api/jobs/${id}`); } catch (e) {
-      const b = document.getElementById("body"); if (b) b.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return;
+      const t = document.getElementById("top"); if (t) t.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return;
     }
     if (location.hash !== `#/job/${id}`) return;
+    const first = status === null;
+    const changed = status !== job.status;
+    status = job.status;
+    const box = document.getElementById("live");
+    if (first) { box.open = BUSY.includes(status); box.dataset.fresh = "1"; }
+    else if (changed && status === "editing") box.open = true;
+    if (first || changed) loadFeed();
+
     const inputs = job.files.filter((f) => f.role === "input");
     const outputs = job.files.filter((f) => f.role === "output" && f.done);
     const videos = outputs.filter((f) => /\.(mp4|mov|m4v)$/i.test(f.name));
@@ -297,10 +352,10 @@ async function viewJob(id) {
     const fileUrl = (f) => `/api/jobs/${id}/files/${f.id}`;
     const step = { uploading: "Still sending from the phone.", ready: "Waiting for the PC to pick it up.",
       downloading: "PC is downloading the footage.", editing: "Claude is editing.", sending: "Sending the finished video back." }[job.status];
-    const body = document.getElementById("body");
-    const playing = body.querySelector("video");
+    const top = document.getElementById("top");
+    const playing = top.querySelector("video");
     if (playing && !playing.paused) { pollTimer = setTimeout(load, 6000); return; } // don't reset a playing video
-    body.innerHTML = `
+    top.innerHTML = `
       <div class="row"><h1 style="font-size:22px">${esc(job.title)}</h1>${chip(job.status)}</div>
       <div class="meta">${ago(job.created)}</div>
       ${step ? `<div class="card" style="margin-top:14px">${step}${job.message ? `<div class="meta">${esc(job.message)}</div>` : ""}</div>` : ""}
@@ -310,6 +365,8 @@ async function viewJob(id) {
         <div class="actions" style="margin-top:10px"><a class="btn ghost" href="${fileUrl(f)}?download">Download ${esc(size(f.size))}</a></div>`).join("")}
       ${job.status === "done" && job.message ? `<h2>Notes from Claude</h2><div class="card note">${esc(job.message)}</div>` : ""}
       ${others.length ? `<h2>Other files</h2><div class="card">${others.map((f) => `<div class="file"><a class="name" style="color:var(--accent)" href="${fileUrl(f)}">${esc(f.name)}</a><span class="size">${size(f.size)}</span></div>`).join("")}</div>` : ""}
+      <div style="height:14px"></div>`;
+    document.getElementById("bottom").innerHTML = `
       ${job.note ? `<h2>Your note</h2><div class="card note">${esc(job.note)}</div>` : ""}
       <h2>Sent footage</h2>
       <div class="card">${inputs.map((f) => `<div class="file"><span class="name">${esc(f.name)}</span><span class="size">${f.done ? size(f.size) : "incomplete"}</span></div>`).join("") || `<div class="meta">None</div>`}</div>
@@ -323,6 +380,12 @@ async function viewJob(id) {
     if (BUSY.includes(job.status) || job.status === "uploading") pollTimer = setTimeout(load, 5000);
   };
   load();
+}
+
+function feedLine(e) {
+  const time = new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (e.k === "run") return `<div class="f-run">${esc(e.x)} · ${time}</div>`;
+  return `<div class="f f-${esc(e.k)}"><span class="f-t">${time}</span><span class="f-x">${esc(e.x)}</span></div>`;
 }
 
 window.addEventListener("hashchange", render);

@@ -79,17 +79,58 @@ async function upload(jobId, path, name) {
   await post(`/api/jobs/${jobId}/files/${meta.id}/complete`, { parts });
 }
 
-function runClaude(cwd, prompt, logPath, onTick) {
+// Turn one tool call from Claude into a short plain-English line for the live feed.
+function describeTool(name, input = {}) {
+  const file = (p) => String(p || "").split(/[\\/]/).pop();
+  switch (name) {
+    case "Bash": return input.description || String(input.command || "").split("\n")[0].slice(0, 120);
+    case "Skill": return `Using the ${input.skill || input.name || ""} skill`;
+    case "Read": return `Reading ${file(input.file_path)}`;
+    case "Write": return `Writing ${file(input.file_path)}`;
+    case "Edit": return `Editing ${file(input.file_path)}`;
+    case "Glob": case "Grep": return "Looking through the files";
+    case "TodoWrite": {
+      const doing = (input.todos || []).find((t) => t.status === "in_progress");
+      return doing ? `Plan: ${doing.activeForm || doing.content}` : "Updating the plan";
+    }
+    default: return name;
+  }
+}
+
+// Runs Claude in the job folder. Steps stream into the live feed (onStep) and claude.log.
+function runClaude(cwd, prompt, logPath, onTick, onStep) {
   return new Promise((resolve) => {
     const out = createWriteStream(logPath, { flags: "a" });
     out.write(`\n===== ${new Date().toISOString()} =====\n`);
     const child = spawn(
       CLAUDE,
-      ["-p", "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,Skill,TodoWrite", "--output-format", "text"],
+      ["-p", "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,Skill,TodoWrite", "--output-format", "stream-json", "--verbose"],
       { cwd, windowsHide: true },
     );
     child.stdin.end(prompt);
-    child.stdout.pipe(out, { end: false });
+    let buf = "";
+    let result = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { out.write(line + "\n"); continue; }
+        if (ev.type === "assistant") {
+          for (const c of ev.message?.content || []) {
+            if (c.type === "text" && c.text.trim()) { onStep("say", c.text.trim()); out.write(`\n${c.text.trim()}\n`); }
+            if (c.type === "tool_use") { const x = describeTool(c.name, c.input); onStep("do", x); out.write(`  > ${x}\n`); }
+          }
+        } else if (ev.type === "result") {
+          result = ev.result || "";
+          out.write(`\n----- result -----\n${result}\n`);
+        }
+      }
+    });
     child.stderr.pipe(out, { end: false });
     const started = Date.now();
     const tick = setInterval(() => onTick(Math.round((Date.now() - started) / 60000)), 60000);
@@ -97,9 +138,30 @@ function runClaude(cwd, prompt, logPath, onTick) {
     child.on("close", (code) => {
       clearInterval(tick);
       out.end(`\n===== exit ${code} =====\n`);
-      resolve(code);
+      resolve({ code, result });
     });
   });
+}
+
+// Batches live-feed lines and sends them every few seconds, in order.
+function liveFeed(jobId) {
+  let pending = [];
+  let first = true;
+  let chain = Promise.resolve();
+  const flush = () => {
+    if (!pending.length && !first) return chain;
+    const entries = pending;
+    const newRun = first;
+    pending = [];
+    first = false;
+    chain = chain.then(() => post(`/api/jobs/${jobId}/activity`, { entries, newRun }).catch((e) => log("feed:", e.message)));
+    return chain;
+  };
+  const timer = setInterval(flush, 3000);
+  return {
+    add: (k, x) => pending.push({ k, x, t: Date.now() }),
+    close: async () => { clearInterval(timer); await flush(); },
+  };
 }
 
 function editPrompt(job) {
@@ -143,9 +205,17 @@ async function processJob(job) {
   );
 
   await setStatus(job.id, "editing", "Started");
-  const code = await runClaude(dir, editPrompt(job), join(dir, "claude.log"), (min) =>
-    setStatus(job.id, "editing", `${min} min in`).catch(() => {}),
+  const feed = liveFeed(job.id);
+  feed.add("sys", `Footage on the PC (${inputs.length} files). Starting Claude.`);
+  const { code } = await runClaude(
+    dir,
+    editPrompt(job),
+    join(dir, "claude.log"),
+    (min) => setStatus(job.id, "editing", `${min} min in`).catch(() => {}),
+    feed.add,
   );
+  feed.add("sys", code === 0 ? "Claude finished." : `Claude stopped (exit ${code}).`);
+  await feed.close();
 
   const outFiles = (await readdir(outDir)).filter((n) => VIDEO_EXT.has(extname(n).toLowerCase()));
   if (!outFiles.length) {

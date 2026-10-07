@@ -32,7 +32,9 @@ export default {
 
     if (path === "/api/login" && request.method === "POST") {
       const { token } = await request.json().catch(() => ({}));
-      if (!env.TOKEN || !safeEqual(String(token || "").trim(), env.TOKEN)) return json({ error: "Wrong code" }, 401);
+      // Forgiving on the phone: any capitals, with or without the dash or spaces.
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!env.TOKEN || !safeEqual(norm(token), norm(env.TOKEN))) return json({ error: "Wrong code" }, 401);
       return json({ ok: true }, 200, {
         "set-cookie": `${COOKIE}=${env.TOKEN}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`,
       });
@@ -112,6 +114,30 @@ async function api(request, env, url) {
     job.updated = Date.now();
     await putJson(B, jobKey(id), job);
     return json(job);
+  }
+
+  // POST /api/jobs/:id/activity  {entries:[{k, x}], newRun?}  — live feed of what Claude is doing
+  if (parts[2] === "activity" && method === "POST") {
+    const body = await request.json();
+    const feed = (await getJson(B, activityKey(id))) || { seq: 0, entries: [] };
+    const now = Date.now();
+    const incoming = [
+      ...(body.newRun ? [{ k: "run", x: "New run" }] : []),
+      ...(Array.isArray(body.entries) ? body.entries : []),
+    ];
+    for (const e of incoming) {
+      feed.entries.push({ s: ++feed.seq, t: e.t || now, k: String(e.k || "say").slice(0, 10), x: String(e.x || "").slice(0, 600) });
+    }
+    feed.entries = feed.entries.slice(-400);
+    await putJson(B, activityKey(id), feed);
+    return json({ seq: feed.seq });
+  }
+
+  // GET /api/jobs/:id/activity?after=<seq>
+  if (parts[2] === "activity" && method === "GET") {
+    const feed = (await getJson(B, activityKey(id))) || { seq: 0, entries: [] };
+    const after = Number(url.searchParams.get("after")) || 0;
+    return json({ seq: feed.seq, entries: feed.entries.filter((e) => e.s > after) });
   }
 
   // POST /api/jobs/:id/files  {name, size, type, role} -> start a multipart upload
@@ -221,6 +247,7 @@ function cleanId(s) {
 
 const jobKey = (id) => `jobs/${id}/job.json`;
 const metaKey = (id, fid) => `jobs/${id}/meta/${fid}.json`;
+const activityKey = (id) => `jobs/${id}/activity.json`;
 
 async function listJobIds(B) {
   const ids = [];
