@@ -401,7 +401,7 @@ async function syncEditorSkills() {
 }
 
 function skillRules(skills) {
-  const toolkit = existsSync(TOOLKIT_DIR) ? readdirSync(TOOLKIT_DIR).filter((n) => n.endsWith(".txt")) : [];
+  const toolkit = existsSync(TOOLKIT_DIR) ? readdirSync(TOOLKIT_DIR).filter((n) => /\.(txt|md)$/.test(n)) : [];
   return `- FIRST, before touching any footage: read these skills of Uthman's in full: ${skills.length ? skills.join(", ") : "(none found)"} (in ~/.claude/skills/<name>/SKILL.md). They hold his style and every correction he has given — the feedback logs matter most. Even when no skill matches the job exactly, his rules carry over (how white flashes look, text and title style, labels on objects, grade, no music unless asked, pacing).
 - Their "restore the toolkit" step reads from a claude.ai Project you can't reach here. ${toolkit.length ? `Local copies are in ${TOOLKIT_DIR}: ${toolkit.join(", ")} — use those instead.` : "No local copy exists yet, so rebuild only what you need, following the skill's rules exactly."}
 - Then write ./PLAN.md (under 15 lines): which skill(s) you're drawing on, the specific rules you'll apply, the structure and length, and anything you're unsure of. Print the plan as your message too — it shows on his phone, and he may redirect you with an idea before you're far in.
