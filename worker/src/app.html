@@ -164,7 +164,8 @@ function viewLogin() {
     } catch (e) { const el = document.getElementById("err"); el.textContent = e.message; el.hidden = false; }
   };
   document.getElementById("go").onclick = go;
-  document.getElementById("code").onkeydown = (e) => e.key === "Enter" && go();
+  // Must not return false here: an on* handler returning false cancels the keystroke.
+  document.getElementById("code").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
 }
 
 async function viewList() {
