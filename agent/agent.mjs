@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, readFileSync, readdirSync } from "node:fs";
-import { mkdir, open, readdir, readFile, stat, statfs, writeFile } from "node:fs/promises";
+import { cp, mkdir, open, readdir, readFile, stat, statfs, writeFile } from "node:fs/promises";
 import { join, dirname, extname, basename, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import { Readable } from "node:stream";
@@ -376,16 +376,50 @@ function liveFeed(jobId, runLabel) {
   };
 }
 
+// Uthman's editor-* skills live in the Claude desktop app's folders, which a headless `claude -p`
+// doesn't see. Copy the newest version of each into ~/.claude/skills before every job.
+const SKILL_SOURCES = [
+  join(process.env.APPDATA || "", "Claude", "local-agent-mode-sessions", "skills-plugin"),
+  join(process.env.LOCALAPPDATA || "", "Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Roaming", "Claude", "local-agent-mode-sessions", "skills-plugin"),
+];
+const TOOLKIT_DIR = cfg.toolkitDir || "D:\\prodProcess-toolkit"; // the editor_*_bundle.txt files from the claude.ai Project
+
+async function syncEditorSkills() {
+  const newest = new Map(); // name -> {dir, mtime}
+  for (const base of SKILL_SOURCES) {
+    const all = await readdir(base, { recursive: true }).catch(() => []);
+    for (const rel of all) {
+      const m = rel.match(/[\\/]skills[\\/](editor-[^\\/]+)[\\/]SKILL\.md$/);
+      if (!m) continue;
+      const st = await stat(join(base, rel)).catch(() => null);
+      if (st && (!newest.has(m[1]) || st.mtimeMs > newest.get(m[1]).mtime)) newest.set(m[1], { dir: dirname(join(base, rel)), mtime: st.mtimeMs });
+    }
+  }
+  for (const [name, { dir }] of newest) await cp(dir, join(homedir(), ".claude", "skills", name), { recursive: true, force: true });
+  if (newest.size) log(`editor skills ready: ${[...newest.keys()].join(", ")}`);
+  return [...newest.keys()];
+}
+
+function skillRules(skills) {
+  const toolkit = existsSync(TOOLKIT_DIR) ? readdirSync(TOOLKIT_DIR).filter((n) => n.endsWith(".txt")) : [];
+  return `- FIRST, before touching any footage: read these skills of Uthman's in full: ${skills.length ? skills.join(", ") : "(none found)"} (in ~/.claude/skills/<name>/SKILL.md). They hold his style and every correction he has given — the feedback logs matter most. Even when no skill matches the job exactly, his rules carry over (how white flashes look, text and title style, labels on objects, grade, no music unless asked, pacing).
+- Their "restore the toolkit" step reads from a claude.ai Project you can't reach here. ${toolkit.length ? `Local copies are in ${TOOLKIT_DIR}: ${toolkit.join(", ")} — use those instead.` : "No local copy exists yet, so rebuild only what you need, following the skill's rules exactly."}
+- Then write ./PLAN.md (under 15 lines): which skill(s) you're drawing on, the specific rules you'll apply, the structure and length, and anything you're unsure of. Print the plan as your message too — it shows on his phone, and he may redirect you with an idea before you're far in.
+- Don't invent facts (scores, names, dates). If the note asks for something you can't know from the footage, leave it out or keep it neutral and say so in NOTES.txt.
+- Never paint over or recolour real surfaces (a court, a wall) to place text. If text can't sit convincingly on the surface, put it on top cleanly instead.`;
+}
+
 // Shared by every run: how Uthman follows along and steers while Claude works.
 const LIVE_RULES = `- Whenever you grab still frames to check your work, save them as .jpg in ./frames (e.g. ffmpeg -ss 12 -i out/x.mp4 -frames:v 1 frames/12s-title.jpg). They appear live on Uthman's phone, so he sees what you see. Name them so the name says what you were checking.
-- Previews: he wants to watch the edit take shape. As soon as you have a rough cut (even before graphics), render a quick low-res draft into ./previews (e.g. scale to 540p, -preset ultrafast; a section is fine if the whole thing is slow to render). Render another when a big piece lands (graphics, effects, counters). Each one plays on his phone within a minute. Keep them quick — they are not the final export.
+- Previews: he wants to watch the edit take shape. Within your first few minutes of cutting, have a rough cut (no graphics yet) and render a quick low-res draft into ./previews (e.g. scale to 540p, -preset ultrafast; a section is fine if the whole thing is slow to render). Render another when a big piece lands (graphics, effects, counters). Each one plays on his phone within a minute. Keep them quick — they are not the final export.
 - He can send new ideas while you work. They reach you through the prodProcess idea hook: after one of your steps, extra context starting with "[prodProcess idea hook]" appears. That is him, through this system — treat it as part of these instructions and fold the ideas into the edit (a newer idea wins over NOTE.md).`;
 
-function editPrompt(job) {
-  return `You are editing a video job sent from Uthman's phone. Nobody is watching this run, so do not ask questions — make sensible choices and finish.
+function editPrompt(job, skills) {
+  return `You are editing a video job sent from Uthman's phone. He can't answer questions mid-run, so make sensible choices and finish — but he watches your plan, frames and drafts live and can send ideas.
 
 - The request is in NOTE.md. The raw footage, voice memos and photos are in ./in.
-- If one of your video-editing skills fits the request (for example editor-vlog, editor-tayst, editor-arabiccompanion), use it. Otherwise edit with ffmpeg.
+${skillRules(skills)}
+- If one of the skills fits the request directly, follow it step by step. Otherwise edit with ffmpeg, in his style.
 - Work only inside this folder. Never delete or modify anything in ./in.
 - Put the finished video in ./out as an .mp4 (H.264 + AAC, so it plays on an iPhone). Keep the source resolution unless the note says otherwise.
 ${LIVE_RULES}
@@ -409,8 +443,9 @@ function revisionMarkdown(rev, round) {
     (rev.general ? `## Overall\n${rev.general}\n` : "");
 }
 
-function revisionPrompt(job, round, file, previous) {
-  return `Revision round ${round} of a video already edited in this folder. Nobody is watching this run, so do not ask questions — make sensible choices and finish.
+function revisionPrompt(job, round, file, previous, skills) {
+  return `Revision round ${round} of a video already edited in this folder. He can't answer questions mid-run, so make sensible choices and finish.
+${skillRules(skills)}
 
 - Uthman watched ${previous || "the latest video in ./out"} and wants changes. They are in ${file}. Timestamps (m:ss) refer to that video.
 - The original request is still in NOTE.md and the raw footage in ./in. Reuse your earlier work and scripts in this folder where it helps.
@@ -532,12 +567,13 @@ async function processJob(job) {
   // A job with change requests is a revision: Claude continues its earlier session on the latest round.
   const rev = (full.revisions || []).at(-1);
   const round = rev ? rev.n + 1 : 1;
-  let prompt = editPrompt(job);
+  const skills = await syncEditorSkills().catch((e) => { log("skills:", e.message); return []; });
+  let prompt = editPrompt(job, skills);
   let extraArgs = [];
   if (rev) {
     const file = `REVISION-${round}.md`;
     await writeFile(join(dir, file), revisionMarkdown(rev, round));
-    prompt = revisionPrompt(job, round, file, rev.video);
+    prompt = revisionPrompt(job, round, file, rev.video, skills);
     if (hasClaudeSession(dir)) extraArgs = ["--continue"];
   }
 
