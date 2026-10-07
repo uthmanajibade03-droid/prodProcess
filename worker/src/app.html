@@ -250,14 +250,6 @@ async function send() {
   let lock = null;
   try { lock = await navigator.wakeLock?.request("screen"); } catch {}
 
-  const total = draft.files.reduce((a, f) => a + f.size, 0);
-  let sent = 0;
-  const show = (label) => {
-    const pct = total ? Math.min(100, (sent / total) * 100) : 100;
-    $("barfill").style.width = pct + "%";
-    $("ptext").textContent = label;
-    $("ppct").textContent = `${size(sent)} / ${size(total)}`;
-  };
   try {
     // Reuse the job if a previous attempt failed part-way, skipping files already up.
     if (!draft.jobId) {
@@ -265,13 +257,11 @@ async function send() {
       draft.jobId = job.id;
       draft.doneIdx = new Set();
     }
-    for (let i = 0; i < draft.files.length; i++) {
-      const f = draft.files[i];
-      if (draft.doneIdx.has(i)) { sent += f.size; continue; }
-      show(`File ${i + 1} of ${draft.files.length}`);
-      await uploadFile(draft.jobId, f, (n) => { sent += n; show(`File ${i + 1} of ${draft.files.length}`); });
-      draft.doneIdx.add(i);
-    }
+    await uploadAll(draft, (p) => {
+      $("barfill").style.width = p.pct + "%";
+      $("ptext").textContent = `${p.filesDone} of ${p.files} files${p.speed ? ` · ${p.speed}` : ""}`;
+      $("ppct").textContent = `${size(p.sent)} / ${size(p.total)}`;
+    });
     await api(`/api/jobs/${draft.jobId}/status`, { method: "POST", body: JSON.stringify({ status: "ready" }) });
     const id = draft.jobId;
     draft = { title: "", note: "", files: [] };
@@ -288,27 +278,114 @@ async function send() {
   }
 }
 
-async function uploadFile(jobId, file, onBytes) {
-  const meta = await api(`/api/jobs/${jobId}/files`, { method: "POST",
-    body: JSON.stringify({ name: file.name, size: file.size, type: file.type || "application/octet-stream", role: "input" }) });
-  const count = Math.max(1, Math.ceil(file.size / PART));
-  const parts = [];
-  for (let n = 1; n <= count; n++) {
-    const blob = file.slice((n - 1) * PART, Math.min(n * PART, file.size));
-    let lastErr;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try {
-        const res = await fetch(`/api/jobs/${jobId}/files/${meta.id}/parts/${n}`, { method: "PUT", body: blob, credentials: "same-origin" });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Upload error ${res.status}`);
-        parts.push(await res.json());
-        lastErr = null;
-        break;
-      } catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); }
-    }
-    if (lastErr) throw lastErr;
-    onBytes(blob.size);
+// Sends every file as 50 MB parts, LANES parts at a time across all files, so the
+// connection never sits idle between parts. Each file is finished as soon as its parts are in.
+const LANES = 4;
+
+async function uploadAll(d, onProgress) {
+  const jobId = d.jobId;
+  const todo = d.files.map((f, i) => i).filter((i) => !d.doneIdx.has(i));
+  const total = d.files.reduce((a, f) => a + f.size, 0);
+  let doneBytes = d.files.reduce((a, f, i) => a + (d.doneIdx.has(i) ? f.size : 0), 0);
+  const inflight = new Map();
+  const state = new Map(); // file index -> { meta, left, parts }
+  const tasks = [];
+  for (const i of todo) {
+    const f = d.files[i];
+    const count = Math.max(1, Math.ceil(f.size / PART));
+    state.set(i, { meta: null, left: count, parts: [] });
+    for (let n = 1; n <= count; n++) tasks.push({ i, n, start: (n - 1) * PART, end: Math.min(n * PART, f.size) });
   }
-  await api(`/api/jobs/${jobId}/files/${meta.id}/complete`, { method: "POST", body: JSON.stringify({ parts }) });
+
+  let speed = "", lastBytes = doneBytes, lastT = performance.now(), rate = 0;
+  const report = () => {
+    const sent = doneBytes + [...inflight.values()].reduce((a, b) => a + b, 0);
+    const now = performance.now();
+    if (now - lastT > 1000) {
+      const r = (sent - lastBytes) / ((now - lastT) / 1000);
+      rate = rate ? rate * 0.7 + r * 0.3 : r;
+      lastBytes = sent; lastT = now;
+      speed = rate > 0 ? `${(rate / 1048576).toFixed(1)} MB/s` : "";
+    }
+    onProgress({ sent, total, pct: total ? Math.min(100, (sent / total) * 100) : 100, filesDone: d.doneIdx.size, files: d.files.length, speed });
+  };
+  const ticker = setInterval(report, 500);
+
+  const metaFor = (i) => {
+    const st = state.get(i);
+    if (!st.meta) {
+      const f = d.files[i];
+      st.meta = api(`/api/jobs/${jobId}/files`, { method: "POST",
+        body: JSON.stringify({ name: f.name, size: f.size, type: f.type || "application/octet-stream", role: "input" }) });
+    }
+    return st.meta;
+  };
+
+  let next = 0, failed = null;
+  const lane = async () => {
+    while (!failed && next < tasks.length) {
+      const t = tasks[next++];
+      const key = `${t.i}:${t.n}`;
+      try {
+        const meta = await metaFor(t.i);
+        const blob = d.files[t.i].slice(t.start, t.end);
+        const part = await putPart(`/api/jobs/${jobId}/files/${meta.id}/parts/${t.n}`, blob, (loaded) => inflight.set(key, loaded));
+        inflight.delete(key);
+        doneBytes += blob.size;
+        const st = state.get(t.i);
+        st.parts.push(part);
+        if (--st.left === 0) {
+          st.parts.sort((a, b) => a.partNumber - b.partNumber);
+          for (let attempt = 0; ; attempt++) {
+            try {
+              await api(`/api/jobs/${jobId}/files/${meta.id}/complete`, { method: "POST", body: JSON.stringify({ parts: st.parts }) });
+              break;
+            } catch (e) {
+              if (attempt >= 4) throw e;
+              await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+            }
+          }
+          d.doneIdx.add(t.i);
+        }
+      } catch (e) {
+        inflight.delete(key);
+        failed = failed || e;
+      }
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: LANES }, lane));
+  } finally {
+    clearInterval(ticker);
+  }
+  if (failed) throw failed;
+  report();
+}
+
+// One part over XHR (fetch can't report upload progress), retried with backoff.
+async function putPart(url, blob, onLoaded) {
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const x = new XMLHttpRequest();
+        x.open("PUT", url);
+        x.upload.onprogress = (e) => onLoaded(e.loaded);
+        x.onload = () => {
+          let body = {};
+          try { body = JSON.parse(x.responseText); } catch {}
+          x.status >= 200 && x.status < 300 ? resolve(body) : reject(new Error(body.error || `Upload error ${x.status}`));
+        };
+        x.onerror = () => reject(new Error("Connection dropped"));
+        x.send(blob);
+      });
+    } catch (e) {
+      lastErr = e;
+      onLoaded(0);
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 async function viewJob(id) {
