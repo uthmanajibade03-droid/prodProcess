@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, readFileSync, readdirSync } from "node:fs";
-import { mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat, statfs, writeFile } from "node:fs/promises";
 import { join, dirname, extname, basename, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import { Readable } from "node:stream";
@@ -266,27 +266,81 @@ function revisionPrompt(job, round, file, previous) {
 Job: "${job.title}"`;
 }
 
+// Footage still to download, plus room for Claude's working files and the export
+// (about the size of the footage again). Fails early with a plain message instead of mid-edit.
+async function checkSpace(inputs, inDir) {
+  let missing = 0;
+  for (const f of inputs) {
+    const p = join(inDir, f.name);
+    if (!(existsSync(p) && (await stat(p)).size === f.size)) missing += f.size;
+  }
+  const total = inputs.reduce((a, f) => a + f.size, 0);
+  const need = missing + total + 2 * 1024 ** 3;
+  const fs = await statfs(JOBS_DIR);
+  const free = fs.bavail * fs.bsize;
+  if (free < need) {
+    const gb = (n) => (n / 1024 ** 3).toFixed(1);
+    throw new Error(`Not enough space on the PC drive for this job (${JOBS_DIR}): needs about ${gb(need)} GB, ${gb(free)} GB free. Free some space, then tap Try again.`);
+  }
+}
+
+function jobDir(job) {
+  const day = new Date(job.created).toISOString().slice(0, 10);
+  return join(JOBS_DIR, `${day}_${slug(job.title)}_${job.id.slice(-4)}`);
+}
+
+// Local file name for each input. Two clips can share a name (IMG_0001.MOV from
+// different days); keep both. Order is by upload time, so names stay stable.
+function localNames(inputs) {
+  const seen = new Map();
+  return inputs.map((f) => {
+    const n = (seen.get(f.name) || 0) + 1;
+    seen.set(f.name, n);
+    return n > 1 ? f.name.replace(/(\.[^.]*)?$/, `_${n}$1`) : f.name;
+  });
+}
+
+// While the phone is still sending, pull down every clip that has fully arrived,
+// so by the time the last one lands the PC is nearly ready to edit.
+async function prefetch() {
+  const { jobs } = await getJson("/api/jobs?status=uploading");
+  for (const job of jobs.sort((a, b) => a.created - b.created)) {
+    const full = await getJson(`/api/jobs/${job.id}`);
+    const inputs = full.files.filter((f) => f.role === "input");
+    const names = localNames(inputs);
+    const inDir = join(jobDir(job), "in");
+    for (const [i, f] of inputs.entries()) {
+      if (!f.done) continue;
+      const dest = join(inDir, names[i]);
+      if (existsSync(dest) && (await stat(dest)).size === f.size) continue;
+      await mkdir(inDir, { recursive: true });
+      log(`prefetch "${job.title}": ${f.name} (${(f.size / 1048576).toFixed(0)} MB)`);
+      await download(job.id, f, dest);
+      return true; // one file per pass, then re-check for jobs that became ready
+    }
+  }
+  return false;
+}
+
 async function processJob(job) {
   const full = await getJson(`/api/jobs/${job.id}`);
-  const inputs = full.files.filter((f) => f.role === "input" && f.done);
-  const day = new Date(job.created).toISOString().slice(0, 10);
-  const dir = join(JOBS_DIR, `${day}_${slug(job.title)}_${job.id.slice(-4)}`);
+  // Keep every input (done or not) in the naming so names match what prefetch used.
+  const allInputs = full.files.filter((f) => f.role === "input");
+  const names = localNames(allInputs);
+  const inputs = allInputs.filter((f) => f.done);
+  const dir = jobDir(job);
   const inDir = join(dir, "in");
   const outDir = join(dir, "out");
   await mkdir(inDir, { recursive: true });
   await mkdir(outDir, { recursive: true });
   log(`job "${job.title}" -> ${dir}`);
 
+  await checkSpace(inputs, inDir);
   await setStatus(job.id, "downloading", `${inputs.length} files`);
-  const seen = new Map();
-  for (const [i, f] of inputs.entries()) {
-    // Two clips can share a name (IMG_0001.MOV from different days); keep both.
-    let name = f.name;
-    const n = (seen.get(name) || 0) + 1;
-    seen.set(name, n);
-    if (n > 1) name = name.replace(/(\.[^.]*)?$/, `_${n}$1`);
-    await setStatus(job.id, "downloading", `File ${i + 1} of ${inputs.length}: ${f.name}`);
-    await download(job.id, f, join(inDir, name));
+  for (const [i, f] of allInputs.entries()) {
+    if (!f.done) continue;
+    await setStatus(job.id, "downloading", `File ${i + 1} of ${allInputs.length}: ${f.name}`);
+    await download(job.id, f, join(inDir, names[i])); // skips files prefetch already pulled
   }
 
   await writeFile(
@@ -350,7 +404,13 @@ async function processJob(job) {
 
 async function main() {
   log(`prodProcess agent — ${SERVER} — jobs in ${JOBS_DIR}`);
-  await mkdir(JOBS_DIR, { recursive: true });
+  // The jobs folder can live on an external drive (the T7); wait for it rather than crash.
+  for (;;) {
+    try { await mkdir(JOBS_DIR, { recursive: true }); break; } catch (e) {
+      log(`can't reach ${JOBS_DIR} (${e.code}) — is the drive plugged in? retrying in 30s`);
+      await new Promise((r) => setTimeout(r, 30000));
+    }
+  }
 
   // Anything left mid-way by a previous run (PC restarted, agent closed) goes back in the queue.
   try {
@@ -376,6 +436,7 @@ async function main() {
         }
         continue;
       }
+      if (await prefetch()) continue;
     } catch (e) {
       log("poll error:", e.message);
     }
