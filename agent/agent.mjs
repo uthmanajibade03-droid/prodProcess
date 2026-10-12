@@ -396,8 +396,13 @@ async function syncEditorSkills() {
     }
   }
   for (const [name, { dir }] of newest) await cp(dir, join(homedir(), ".claude", "skills", name), { recursive: true, force: true });
-  if (newest.size) log(`editor skills ready: ${[...newest.keys()].join(", ")}`);
-  return [...newest.keys()];
+  // Plus editor skills made on this PC (e.g. editor-hoops), which live only in ~/.claude/skills.
+  const local = (await readdir(join(homedir(), ".claude", "skills"), { withFileTypes: true }).catch(() => []))
+    .filter((e) => e.isDirectory() && e.name.startsWith("editor-") && existsSync(join(homedir(), ".claude", "skills", e.name, "SKILL.md")))
+    .map((e) => e.name);
+  const all = [...new Set([...newest.keys(), ...local])].sort();
+  if (all.length) log(`editor skills ready: ${all.join(", ")}`);
+  return all;
 }
 
 function skillRules(skills) {
