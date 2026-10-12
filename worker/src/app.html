@@ -654,6 +654,7 @@ function feedLine(e, jobId) {
   }
   if (e.k === "vid") {
     const [fid, ...rest] = e.x.split("|");
+    if (!/^(previews|out)\//.test(rest.join("|"))) return ""; // early runs also sent Claude's working pieces — not drafts
     const src = `/api/jobs/${jobId}/files/${encodeURIComponent(fid)}`;
     return `<div class="f f-vid"><span class="f-t">${time}</span><span class="f-x">
       <video src="${src}" controls playsinline preload="none"></video><span class="cap">Draft · ${esc(rest.join("|"))}</span></span></div>`;
