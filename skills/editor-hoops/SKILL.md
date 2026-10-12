@@ -13,6 +13,60 @@ Look at both frames in `reference/` before you start — they are the target:
 - `reference/big-title-giants.png` — one word filling the whole frame, red on black, glowing.
 - `reference/negative-punch-in-film-border.png` — tight face shot as a high-contrast inverted (negative) B&W image inside a film-strip border.
 
+## PHILOSOPHY — how the reference actually works (UPDATED Oct 12; measured frame by frame)
+His words: "really study the philosophy of this NBA edit — not just the outside. This will make innovation easy."
+The look (B&W, red, big text) is the surface. Underneath, the reference was measured across all 14,344 frames
+(307 shots) and these are the rules it follows. Study the strips in `reference/strip-*.png` (timecodes in the names).
+
+**1. It's a story about people, not a list of baskets.** Every edit follows one hero (or one idea) and keeps cutting
+back to his **face** between pieces of action — before the move (focus), right after (reaction). The basket is the
+setup; the **emotion after it is the payoff.** For a pickup run: the heroes are whoever made the best plays (the dunker
+first); the story is the day — arrive, the run heats up, the moment, the aftermath. Build your cut around the 2–3
+people who own the best moments, and come back to their faces.
+
+**2. Anatomy of one highlight** (`strip-play-anatomy-82s-91s.png`):
+   a. the **whole play, wide, real speed** — the possession, the drive/pass, the shot (2–3 s; let it breathe)
+   b. punch **tighter as it climaxes** (digital push-in on the shooter as he rises)
+   c. the **finish again from a closer angle** — a replay. With one camera, the "second angle" is a tight crop of the
+      4K frame on the rim/player, played again in slow motion
+   d. the **reaction** — a face/celebration close-up, isolated, darker, slow push-in, slow-mo, 1–1.5 s
+   e. a **beat of black** (≈1 s) or a hard cut, then the next play.
+   Never show only the ball dropping in. Never cut away before the reaction.
+
+**3. Rhythm = contrast.** Median shot 0.8 s; a quarter of shots ≤ 0.33 s; only 1 in 10 longer than 3.5 s; ~39 cuts/min.
+   Bursts of 0.2–0.4 s micro-shots (the energy) alternate with held moments of 2–4 s (the play, the face) and
+   **black gaps of ~1.2 s about every 20 s** (22 in 8 min) — breaths that make the next hit land. Fast–fast–fast–HOLD–black.
+
+**4. Zoom grammar** (`strip-hero-burst-117s-127s.png`, `strip-talk-pushin-then-wide-play-75s-86s.png`) — the camera is never still:
+   - **zoom pulse** at the start of a shot: scale 100→108–112% over 4–6 frames, eased out (energy hit)
+   - **slow push-in** on faces and held moments: 100→115% over 2–3 s
+   - **punch-in crop** for replays/close angles (crop the 4K to the action, 1.5–2.5×)
+   - **quick zoom-out** to reveal the court after a tight shot
+   - subtle **shake** (2–6 px, few frames) on impacts. All from the 4K source so it stays sharp.
+
+**5. Slow motion is short and pointed** — not long sections. 0.5–1.5 s on the release, the rim, or the reaction face,
+   usually with a slow push-in and the background darkened; then snap back to real speed or cut. About 10–15% of runtime.
+   **Slow-mo has NO original audio** (his rule: slowed court sound "sounds terrible") — only SFX (whoosh in, impact,
+   riser, ringing) or near-silence; real court sound returns with real speed.
+
+**6. Voice carries the story.** The reference uses spoken words (press conferences, commentators, podcasts) to set up
+   each edit, with single pop-up caption words. For BBP, use **real voices from the footage only**: shouts, trash
+   talk, "and one!", someone calling the next game — transcribe them (install faster-whisper if needed) and use a strong
+   line as a soundbite over a held shot, with 1–3 word pop-up captions of what was actually said. Never invent words.
+
+**7. Look follows function, not a filter.** Measured: colour 32%, muted colour 34%, B&W 26%, black 8%. Live play in
+   colour/muted; the hero, faces, build-ups and emotion in B&W; red-on-black for titles/openers only.
+
+**8. Accents stay rare so they hit.** Only ~3 full white flashes in 8 minutes. Negative punch-ins, red streaks and the
+   film border are seasoning: a few per minute, each on a meaningful beat — never on every cut.
+
+**9. Titles are events.** One huge word slams in on a black beat (the BBP frame), or a name **types on letter by
+   letter with a glitch** (`strip-typed-title-then-voice-405s-417s.png`). Outros end on texture — **light-trail
+   overlays on black** (`strip-light-trail-outro-453s-477s.png`) — not a fade.
+
+**Innovate from these rules**, not by copying shots: ask for each moment "who is the hero, what's the setup, where's
+the payoff, what does his face do after?" and build the shot around that.
+
 ## 0. Hard rules
 - **16:9, never vertical.** Keep source resolution (4K stays 4K).
 - **No music, ever** — but SFX are wanted (see §6). The reference is cut to songs; here the rhythm comes from the cuts, the court sound and matched SFX.
@@ -48,10 +102,11 @@ Take the time this needs — a 2-hour careful edit beats a 20-minute lazy one.
 - **Colour → B&W switch** on a freeze or the white flash to mark a big moment, or B&W → colour the instant the ball drops. These switches are where the edit feels designed.
 - Red-on-black and negative only as accents (above). Never pump saturation.
 
-## 2. Slow motion
-- The biggest moments (a make, a block, a crossover, a celebration, a walk-off) go to **slow motion: 30–50% speed**. Ramp in: real speed → slow just before the peak (the release, the ball at the rim) → hold the slow through the make → snap back to real speed or cut on the flash.
-- Use frame interpolation so slow-mo is smooth: `minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:vsbmc=1` then `setpts=2.0*PTS` (or retime 60p sources directly if any exist — check with ffprobe).
-- Not everything: run-of-play stays real speed and fast so the slow moments hit. Roughly 25–35% of runtime in slow-mo.
+## 2. Slow motion (see PHILOSOPHY 2 & 5)
+- Short and pointed: 0.5–1.5 s at **30–50% speed** on the release, the ball at the rim, the dunk, or the reaction face — usually as the *replay* (tight crop) after the real-speed play. Ramp: real speed → slow just before the peak → snap back or cut.
+- Smooth: `minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:vsbmc=1` then `setpts=2.0*PTS` (or retime 60p sources directly if any exist — check with ffprobe). Add a slow push-in.
+- **Mute the original audio under every slow-mo section** — SFX or near-silence only.
+- About 10–15% of runtime. Run-of-play stays real speed.
 
 ## 3. Big text
 - **Full-frame title words**: one word (sometimes two) in a heavy condensed sans (Anton, Bebas Neue Bold, or Impact; download Anton from Google Fonts if missing), ALL CAPS, filling ~85–95% of frame width, letters almost touching the frame edges.
@@ -62,7 +117,7 @@ Take the time this needs — a 2-hour careful edit beats a 20-minute lazy one.
 - No small stat/score text. Big words only.
 
 ## 4. Transitions (all on the cut, short)
-- **White flash** (keep his vlog-skill flash: full-frame bloom envelope 1,1,1,1,1,.6,.25) into big moments.
+- **White flash** (keep his vlog-skill flash: full-frame bloom envelope 1,1,1,1,1,.6,.25) — rare: only into the 2–4 biggest moments of the whole edit.
 - **Red light streaks on black**: 4–10 frames of thin glowing red diagonal streaks on black between scenes (generate with geq/drawbox + boxblur + glow, or film-burn style). See the reference opener.
 - **Whip/motion-blur smear**: 3–6 frames of directional blur (`dblur` or `avgblur` stacked with tmix) across the cut when the camera or player moves fast.
 - **Hard cut to black** for 4–12 frames before a big title — silence + black makes the title land.
@@ -83,7 +138,8 @@ waveform image and pick by character, not by name). Every SFX must **match what'
 - **Riser** under the build-up before the biggest play (2–4 s), cutting dead to silence for 0.3–0.5 s, then the impact + real crowd sound.
 - **Camera shutter / mechanics** on freeze-frames, photo-style stills, the negative punch-ins and the film-border sections.
 - **High Pitch Ringing** once at most — after the single biggest moment, under slow-mo, like the world goes quiet.
-- Court sound stays underneath everything (bounces, sneakers, the net, shouts) — cleaned (highpass 80, afftdn), and on slow-mo slowed + reverbed (`asetrate`/`atempo` down, `aecho=0.8:0.85:60|120:0.35|0.25`).
+- Court sound stays underneath the real-speed parts (bounces, sneakers, the net, shouts) — cleaned (highpass 80, afftdn). **Never slow the court sound down — mute it under slow-mo** (his rule).
+- Real voices from the footage (shouts, trash talk) are the soundbites — see PHILOSOPHY 6.
 - Mix: SFX sit with the court sound, not over it — duck court sound 4–6 dB under impacts; nothing clips; final about -14 LUFS, true peak ≤ -1 dB.
 - Also harvest real sounds from the footage (a clean swish, a sneaker squeak, a bounce) and reuse them as accents.
 
