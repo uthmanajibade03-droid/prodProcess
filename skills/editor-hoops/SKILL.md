@@ -162,6 +162,26 @@ waveform image and pick by character, not by name). Every SFX must **match what'
 5. Out: faces, celebration, walk-off in slow-mo B&W → final red **BBP** → black.
 Aim ~60–90 s unless asked; tell him what length the footage could support.
 
+## 7b. Working section by section (how he wants to work now)
+After v2 ("TERRIBLE") the edit is built in sections of ~15 s, each approved by him before the next:
+section 1 = cold open (BBP) + the first full play with its replay and reaction; then each next section adds the
+next 2–3 highlights. Each round: build ONLY the requested section, polish it fully (grade, zooms, SFX, mix), run the
+strict self-review (§8b), export it as `out/section-<n>.mp4` AND append it to the approved sections as
+`out/basket-bbp_sections-1-to-<n>.mp4`, then stop. Don't start the next section until he approves.
+
+## 8b. Strict self-review — every draft, before he sees it
+v2 failed on shots that should never have survived. Extract a frame every 0.25 s of your draft (and look at each
+shot at full rate around its cut points) and **reject and replace** any shot that is:
+- **empty or dead**: a wall, sky, trees, floor, an empty rim, a backboard with no ball and no player doing anything
+- **blurry by accident**: out of focus, motion-smeared beyond recognition (intended whip-blurs are ≤ 6 frames and only on a cut)
+- **hard to read**: the action is tiny/far away — punch in (crop the 4K) until the player and the ball are clear, or drop it
+- **too dark or blown out**: faces must read; no clipped white negative frames that look like an error (the negative look keeps facial detail, max 0.5 s, max 2 per section)
+- **cut-off people** (half a head at the edge) unless it's a deliberate close-up
+- **black that drags**: black gaps ≤ 0.6 s, at most one per section, never a lone letter on black, never an outro of abstract scribbles longer than 1 s
+- **colour that looks garish**: the colour shots must match each other and sit next to the B&W without the court looking neon — tame saturation/contrast so the cut feels like one film
+For every section write `REVIEW-<n>.md`: each shot's in/out, what's in it, PASS/FAIL and what you replaced. Only
+send him a section where every shot passes, and say in your notes what you rejected.
+
 ## 8. QA before export
 - Grab frames of every title, every slow-mo peak, every transition into ./frames and look at them.
 - Check: blacks are true black (not grey), red is deep red (not orange/pink), titles fill the frame, no text over faces, slow-mo is smooth (no stutter), audio has no clicks at cuts.
