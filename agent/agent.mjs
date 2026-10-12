@@ -158,9 +158,9 @@ function watchFrames(dir, jobId, feed, since) {
   };
 }
 
-// "Watch it take shape": draft renders Claude saves (./previews, or any new video outside ./in)
+// "Watch it take shape": draft renders Claude saves in ./previews (and new versions in ./out)
 // are shrunk to a small 540p copy and posted to the feed as playable videos.
-const MAX_PREVIEWS_PER_RUN = 25;
+const MAX_PREVIEWS_PER_RUN = 40;
 
 function watchPreviews(dir, jobId, feed, since) {
   const seen = new Map(); // path -> "size:mtime" last scan (wait until it stops changing)
@@ -176,7 +176,8 @@ function watchPreviews(dir, jobId, feed, since) {
     try {
       for (const rel of await readdir(dir, { recursive: true })) {
         if (count >= MAX_PREVIEWS_PER_RUN) break;
-        if (rel.startsWith("in" + sep) || rel.startsWith(".")) continue;
+        // Only real drafts (./previews) and versions (./out) — never Claude's working pieces (shot files etc.).
+        if (!(rel.startsWith("previews" + sep) || rel.startsWith("out" + sep))) continue;
         if (!VIDEO_EXT.has(extname(rel).toLowerCase())) continue;
         const path = join(dir, rel);
         const st = await stat(path).catch(() => null);

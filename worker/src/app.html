@@ -463,7 +463,7 @@ async function viewJob(id) {
       ${step ? `<div class="card" style="margin-top:14px">${step}${job.message ? `<div class="meta">${esc(job.message)}</div>` : ""}</div>` : ""}
       ${job.status === "failed" ? `<div class="card" style="margin-top:14px"><div class="err" style="margin:0">${esc(job.message || "Something went wrong.")}</div>
         <button class="ghost small" id="retry" style="margin-top:10px">Try again</button></div>` : ""}
-      ${videos.length ? `<h2>${videos.length > 1 ? `Latest · version ${videos.length}` : "Finished"}</h2>
+      ${videos.length ? `<h2>${BUSY.includes(job.status) ? `Previous version — Claude is making round ${(job.revisions || []).length + 1}, drafts appear below` : videos.length > 1 ? `Latest · version ${videos.length}` : "Finished"}</h2>
         <video id="mainVideo" src="${fileUrl(videos[0])}" controls playsinline preload="metadata"></video>
         <div class="actions" style="margin-top:10px"><a class="btn ghost" href="${fileUrl(videos[0])}?download">Download ${esc(size(videos[0].size))}</a></div>
         ${["done", "failed"].includes(job.status) ? reviewPanel() : ""}
@@ -571,20 +571,29 @@ function wireReview(jobId, draft, latest, reload) {
 function drawShape(job, id) {
   const el = document.getElementById("shape");
   const busy = BUSY.includes(job.status);
-  const frames = job.files.filter((f) => f.role === "frame" && f.done);
-  const drafts = job.files.filter((f) => f.role === "preview" && f.done).sort((a, b) => b.created - a.created);
+  // While a round is running, only that round's frames and drafts — never the last round's.
+  const since = busy ? (job.runAt || 0) : 0;
+  const round = (job.revisions || []).length + 1;
+  const frames = job.files.filter((f) => f.role === "frame" && f.done && f.created >= since);
+  const drafts = job.files.filter((f) => f.role === "preview" && f.done && f.created >= since).sort((a, b) => b.created - a.created);
   const peek = busy && job.status !== "ready" ? frames.at(-1) : null;
+  const roundLabel = round > 1 ? `Round ${round} · ` : "";
   const key = `${busy}|${peek?.id || ""}|${drafts.map((f) => f.id).join()}`;
   if (el.dataset.key === key) return;
   if ([...el.querySelectorAll("video")].some((v) => !v.paused)) return;
   el.dataset.key = key;
-  if (!peek && !drafts.length) { el.innerHTML = ""; return; }
+  if (!peek && !drafts.length) {
+    el.innerHTML = busy && ["downloading", "editing"].includes(job.status)
+      ? `<h2>${roundLabel}Taking shape</h2><div class="card hint" style="margin-top:0">No draft for this ${round > 1 ? "round" : "edit"} yet — Claude reads the skills and writes its plan first (in the live feed below), then renders a rough cut within a few minutes. It appears here to play.</div>`
+      : "";
+    return;
+  }
   const src = (f) => `/api/jobs/${id}/files/${f.id}`;
   const when = (f) => new Date(f.created).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const draft = (f, n, preload) => `<div class="draft"><div class="meta">Draft ${n} · ${when(f)} · ${esc(f.name)}</div>
     <video src="${src(f)}" controls playsinline preload="${preload}"></video></div>`;
   el.innerHTML = busy
-    ? `<h2>Taking shape</h2>
+    ? `<h2>${roundLabel}Taking shape</h2>
       ${peek ? `<div class="peek"><img src="${src(peek)}" alt=""><div class="cap">Latest frame Claude checked · ${esc(peek.name)} · ${when(peek)}</div></div>` : ""}
       ${drafts.length ? draft(drafts[0], drafts.length, "metadata") : `<div class="hint">Rough drafts will show up here to play as soon as Claude renders one.</div>`}
       ${drafts.length > 1 ? `<details class="card earlier"><summary>Earlier drafts (${drafts.length - 1})</summary>

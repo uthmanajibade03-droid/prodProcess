@@ -92,8 +92,10 @@ async function api(request, env, url) {
 
   // GET /api/jobs/:id
   if (parts.length === 2 && method === "GET") {
-    const [files, ideas] = await Promise.all([listFiles(B, id), getJson(B, ideasKey(id))]);
-    return json({ ...job, files, ideas: ideas || [] });
+    const [files, ideas, feed] = await Promise.all([listFiles(B, id), getJson(B, ideasKey(id)), getJson(B, activityKey(id))]);
+    // Start of the current run = the latest "run" marker in the feed (newer than a stored runAt, if any).
+    const lastRun = (feed?.entries || []).filter((e) => e.k === "run").at(-1)?.t || 0;
+    return json({ ...job, runAt: Math.max(job.runAt || 0, lastRun), files, ideas: ideas || [] });
   }
 
   // POST /api/jobs/:id/ideas  {text}  — a new idea while the job is queued or being edited.
@@ -139,8 +141,7 @@ async function api(request, env, url) {
     if (!STATUSES.includes(body.status)) throw httpError(400, "Bad status");
     job.status = body.status;
     job.message = String(body.message || "").slice(0, 4000);
-    if (Array.isArray(body.caps)) job.caps = body.caps.slice(0, 10).map(String); // what this run supports (ideas, previews)
-    job.updated = Date.now();
+    if (Array.isArray(body.caps)) job.caps = body.caps.slice(0, 10).map(String); // what this run supports (ideas, previews)    job.updated = Date.now();
     await putJson(B, jobKey(id), job);
     return json(job);
   }
@@ -189,6 +190,11 @@ async function api(request, env, url) {
     }
     feed.entries = feed.entries.slice(-400);
     await putJson(B, activityKey(id), feed);
+    if (body.newRun) { // a new edit run: the phone shows only drafts made from here on
+      const fresh = (await getJson(B, jobKey(id))) || job;
+      fresh.runAt = now;
+      await putJson(B, jobKey(id), fresh);
+    }
     return json({ seq: feed.seq });
   }
 
@@ -247,6 +253,12 @@ async function api(request, env, url) {
     delete meta.uploadId;
     await putJson(B, metaKey(id, fid), meta);
     return json(meta);
+  }
+
+  // DELETE /api/jobs/:id/files/:fid  — remove one stored file (e.g. a preview that wasn't a real draft)
+  if (parts[2] === "files" && parts.length === 4 && method === "DELETE") {
+    await B.delete([fileKey, metaKey(id, fid)]);
+    return json({ ok: true });
   }
 
   // GET /api/jobs/:id/files/:fid   (supports Range so videos play/seek on the phone)
