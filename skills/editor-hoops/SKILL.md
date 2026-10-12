@@ -32,13 +32,21 @@ people who own the best moments, and come back to their faces.
    d. the **reaction** — a face/celebration close-up, isolated, darker, slow push-in, slow-mo, 1–1.5 s
    e. a **beat of black** (≈1 s) or a hard cut, then the next play.
    Never show only the ball dropping in. Never cut away before the reaction.
+   **Step a is ONE continuous shot — never cut inside a scoring play** (his note after round 2: "you're not fully
+   showing the plays where the buckets were made — you keep cutting it"). From the start of the possession (ball
+   up the court / start of the drive or pass) through the shot, the ball through the net and landing, to the first
+   reaction. Speed and cuts come only after it: replay, face, black.
 
 **3. Rhythm = contrast.** Median shot 0.8 s; a quarter of shots ≤ 0.33 s; only 1 in 10 longer than 3.5 s; ~39 cuts/min.
    Bursts of 0.2–0.4 s micro-shots (the energy) alternate with held moments of 2–4 s (the play, the face) and
    **black gaps of ~1.2 s about every 20 s** (22 in 8 min) — breaths that make the next hit land. Fast–fast–fast–HOLD–black.
 
-**4. Zoom grammar** (`strip-hero-burst-117s-127s.png`, `strip-talk-pushin-then-wide-play-75s-86s.png`) — the camera is never still:
-   - **zoom pulse** at the start of a shot: scale 100→108–112% over 4–6 frames, eased out (energy hit)
+**4. Zoom grammar** (`strip-hero-burst-117s-127s.png`, `strip-talk-pushin-then-wide-play-75s-86s.png`) — the camera is never still,
+   and **every zoom is SMOOTH** (his note: "the zoom in should be smooth — not just sudden"): eased in and out
+   (ease-in-out cubic), never a jump between two frames. Render with sub-pixel precision — Python/OpenCV
+   `warpAffine` with a float scale/offset per frame on the 4K source (INTER_CUBIC); ffmpeg `zoompan`/`crop` move in
+   whole pixels and jitter. Check every zoom at full frame rate before using it.
+   - **zoom pulse** at the start of a shot: scale 100→108–112% over 10–15 frames, eased (energy hit, but smooth)
    - **slow push-in** on faces and held moments: 100→115% over 2–3 s
    - **punch-in crop** for replays/close angles (crop the 4K to the action, 1.5–2.5×)
    - **quick zoom-out** to reveal the court after a tight shot
@@ -130,7 +138,10 @@ Take the time this needs — a 2-hour careful edit beats a 20-minute lazy one.
 - Letterbox bars (2.39:1) are allowed for intro/outro sections.
 
 ## 6. Sound — no music, but full sound design with SFX
-No songs, no beats. But **SFX are wanted** ("add sfx that actually match"). Kit: `D:\prodProcess-toolkit\sfx\`
+No songs, no beats. But **SFX are wanted** ("add sfx that actually match"). **No silent transitions and no silent
+titles**: every whip/zoom/smear gets a whoosh, every title slam and cut to black an impact, every negative flash or
+freeze a shutter. The opening **BBP** always gets a riser into it and a heavy impact exactly on the slam (and the
+closing BBP too). Kit: `D:\prodProcess-toolkit\sfx\`
 (38 wavs: `Whoosh\` ×18, `Impacts\` ×8, `Risers\` ×6, `Camera Sounds\` ×6 — listen/inspect each with ffprobe +
 waveform image and pick by character, not by name). Every SFX must **match what's on screen**, sync to the frame:
 - **Whoosh** on whip-blurs and fast transitions — short/quick ones for quick cuts, deep/long ones into slow-mo or titles. Start the whoosh 2–4 frames before the cut so its peak lands on it.
