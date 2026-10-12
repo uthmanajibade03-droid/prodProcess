@@ -16,7 +16,8 @@ Look at both frames in `reference/` before you start — they are the target:
 ## 0. Hard rules
 - **16:9, never vertical.** Keep source resolution (4K stays 4K).
 - **No music, ever** — but SFX are wanted (see §6). The reference is cut to songs; here the rhythm comes from the cuts, the court sound and matched SFX.
-- **Never invent facts** — no made-up scores, names, stats or dates. Text is words, moods and real facts only.
+- **Never invent facts** — no made-up scores, names, stats or dates.
+- **No points and no team names on screen, ever** — no score, no +2/+3 pops, no tally, no team or shirt-colour labels ("teal", "BLK"). His rule: "dont show no point or team name - dont make stuff up". Text is only BBP and simple chapter words.
 - **Never recolour surfaces to place text** (the first basketball edit turned a court neon). Big titles go on black or over a darkened/graded frame, not painted into the scene.
 - Show the **PLAN** first and a **rough cut early** (draft in ./previews) — he watches and steers live.
 
@@ -58,7 +59,7 @@ Take the time this needs — a 2-hour careful edit beats a 20-minute lazy one.
 - Timing: 0.6–1.5 s each. Animate subtly: slow push-in (scale 100→104%), or flicker on (2–3 frame on/off), or slide up with motion blur.
 - **The crew's name is BBP.** The signature title is **BBP** — exactly the reference "GIANTS" frame (same heavy condensed font, deep red, glow, filling the frame) with "GIANTS" replaced by "BBP". Use it in the cold open and as the final word. With only three letters, scale it so it still fills ~85–95% of the frame width (and most of the height).
 - Other chapter beats: e.g. **OUTSIDE**, **INSIDE**, **RUN IT**, **NEXT**. Between 3 and 6 big words per minute of edit.
-- Smaller supporting text (optional): white, same font, small, centred lower third or top — short real facts only ("game point", "11 to 9" only if you actually counted it).
+- No small stat/score text. Big words only.
 
 ## 4. Transitions (all on the cut, short)
 - **White flash** (keep his vlog-skill flash: full-frame bloom envelope 1,1,1,1,1,.6,.25) into big moments.
