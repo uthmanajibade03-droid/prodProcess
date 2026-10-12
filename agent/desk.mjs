@@ -21,6 +21,7 @@ export async function startDesk(o) {
   const { port, here, server, api, getJson, post, log, jobDir, agentState, getJobsDir, setJobsDir } = o;
   const copies = new Map(); // jobId -> {title, total, done, file, error}
   let appHtml = null;
+  let appAt = 0;
 
   const send = (res, code, body, type = "application/json") => {
     res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
@@ -46,7 +47,11 @@ export async function startDesk(o) {
 
       if (p === "/" || p === "/index.html") return send(res, 200, await readFile(join(here, "desk.html")), "text/html; charset=utf-8");
       if (p === "/app") {
-        if (!appHtml || url.searchParams.has("fresh")) appHtml = await (await fetch(server + "/")).text();
+        // Re-fetch at most once a minute so a newly deployed phone page shows up here without a restart.
+        if (!appHtml || url.searchParams.has("fresh") || Date.now() - appAt > 60000) {
+          appHtml = await (await fetch(server + "/")).text();
+          appAt = Date.now();
+        }
         return send(res, 200, appHtml, "text/html; charset=utf-8");
       }
       if (p === "/manifest.json" || p === "/icon.png") return proxy(req, res, server + p);
